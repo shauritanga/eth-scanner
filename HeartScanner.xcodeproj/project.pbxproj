@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		F091DEC42E53FFDF00AB6A14 /* ButterflyImagingKit in Frameworks */ = {isa = PBXBuildFile; productRef = F091DEC32E53FFDF00AB6A14 /* ButterflyImagingKit */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		F02C44952E53B356001EC294 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -29,9 +33,22 @@
 		F02C449E2E53B356001EC294 /* HeartScannerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = HeartScannerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		F02C44B32E53B5A2001EC294 /* Exceptions for "HeartScanner" folder in "HeartScanner" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = F02C44862E53B346001EC294 /* HeartScanner */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		F02C44892E53B346001EC294 /* HeartScanner */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				F02C44B32E53B5A2001EC294 /* Exceptions for "HeartScanner" folder in "HeartScanner" target */,
+			);
 			path = HeartScanner;
 			sourceTree = "<group>";
 		};
@@ -52,6 +69,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F091DEC42E53FFDF00AB6A14 /* ButterflyImagingKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -78,6 +96,7 @@
 				F02C44892E53B346001EC294 /* HeartScanner */,
 				F02C44972E53B356001EC294 /* HeartScannerTests */,
 				F02C44A12E53B356001EC294 /* HeartScannerUITests */,
+				F02C44C22E53BAC5001EC294 /* Frameworks */,
 				F02C44882E53B346001EC294 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -90,6 +109,13 @@
 				F02C449E2E53B356001EC294 /* HeartScannerUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		F02C44C22E53BAC5001EC294 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -112,6 +138,7 @@
 			);
 			name = HeartScanner;
 			packageProductDependencies = (
+				F091DEC32E53FFDF00AB6A14 /* ButterflyImagingKit */,
 			);
 			productName = HeartScanner;
 			productReference = F02C44872E53B346001EC294 /* HeartScanner.app */;
@@ -195,6 +222,9 @@
 			);
 			mainGroup = F02C447E2E53B346001EC294;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				F091DEC22E53FFD100AB6A14 /* XCRemoteSwiftPackageReference "ImagingSDK-iOS" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = F02C44882E53B346001EC294 /* Products */;
 			projectDirPath = "";
@@ -400,11 +430,13 @@
 				DEVELOPMENT_TEAM = Z3P578GCG4;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = HeartScanner/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -428,11 +460,13 @@
 				DEVELOPMENT_TEAM = Z3P578GCG4;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = HeartScanner/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -558,6 +592,26 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		F091DEC22E53FFD100AB6A14 /* XCRemoteSwiftPackageReference "ImagingSDK-iOS" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ButterflyNetwork/ImagingSDK-iOS";
+			requirement = {
+				kind = versionRange;
+				maximumVersion = 2.0.0;
+				minimumVersion = 1.2.4;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		F091DEC32E53FFDF00AB6A14 /* ButterflyImagingKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F091DEC22E53FFD100AB6A14 /* XCRemoteSwiftPackageReference "ImagingSDK-iOS" */;
+			productName = ButterflyImagingKit;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = F02C447F2E53B346001EC294 /* Project object */;
 }

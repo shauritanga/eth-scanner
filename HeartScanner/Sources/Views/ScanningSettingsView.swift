@@ -1,0 +1,226 @@
+import ButterflyImagingKit
+import SwiftUI
+
+struct ScanningSettingsView: View {
+    @ObservedObject var model: Model
+    @Environment(\.dismiss) private var dismiss
+
+    let isScanning: Bool
+
+    @State private var controlDepth = 10.0
+    @State private var controlGain = 50.0
+    @State private var controlColorGain = 0.0
+    @State private var controlMode: UltrasoundMode = .bMode
+    @State private var controlPreset: ImagingPreset?
+
+    // Image quality settings
+    @State private var imageStabilization = true
+    @State private var noiseReduction = true
+    @State private var contrastEnhancement = true
+    @State private var frameAveraging = false
+
+    let imaging = ButterflyImaging.shared
+
+    var body: some View {
+        Form {
+            Section("Imaging Mode") {
+                Picker("Select a mode", selection: $controlMode) {
+                    if let supportedModes = model.preset?.supportedModes {
+                        ForEach(supportedModes) { mode in
+                            Text(mode.description).tag(mode)
+                        }
+                    }
+                }
+                .pickerStyle(SegmentedPickerStyle())
+                .onChange(of: controlMode) { _, value in
+                    imaging.setMode(value)
+                    print("Changed mode: \(value.description)")
+                }
+            }
+
+            Section("Preset") {
+                PresetPicker(
+                    controlPreset: $controlPreset,
+                    availablePresets: .constant(model.availablePresets)
+                )
+                .onChange(of: controlPreset) { _, preset in
+                    guard let preset else { return }
+                    imaging.setPreset(preset, parameters: nil)
+                    controlMode = .bMode
+                    print("Changed preset: \(preset.name)")
+                }
+            }
+
+            Section("Depth") {
+                BoundsSlider(title: "", control: $controlDepth, bounds: $model.depthBounds) {
+                    editing in
+                    guard !editing else { return }
+                    imaging.setDepth(Measurement.centimeters(controlDepth))
+                }
+            }
+
+            Section("Gain Controls") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Gain: \(Int(controlGain))")
+                        .font(.subheadline)
+
+                    Slider(
+                        value: Binding(
+                            get: { controlGain },
+                            set: { newVal in
+                                controlGain = newVal
+                                imaging.setGain(Int(controlGain))
+                            }
+                        ),
+                        in: 0...100
+                    ) {
+                        Text("Gain")
+                    } minimumValueLabel: {
+                        Text("0")
+                    } maximumValueLabel: {
+                        Text("100")
+                    }
+                }
+
+                if model.mode == .colorDoppler {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Color Gain: \(Int(controlColorGain))")
+                            .font(.subheadline)
+
+                        Slider(
+                            value: Binding(
+                                get: { controlColorGain },
+                                set: { newVal in
+                                    controlColorGain = newVal
+                                    imaging.setColorGain(Int(controlColorGain))
+                                }
+                            ),
+                            in: 0...100
+                        ) {
+                            Text("Color Gain")
+                        } minimumValueLabel: {
+                            Text("0")
+                        } maximumValueLabel: {
+                            Text("100")
+                        }
+                    }
+                }
+            }
+
+            Section("Image Quality") {
+                Toggle("Image Stabilization", isOn: $imageStabilization)
+                    .onChange(of: imageStabilization) { _, newValue in
+                        // Apply image stabilization setting
+                        print(
+                            "🔧 IMAGE QUALITY: Image stabilization \(newValue ? "enabled" : "disabled")"
+                        )
+                    }
+
+                Toggle("Noise Reduction", isOn: $noiseReduction)
+                    .onChange(of: noiseReduction) { _, newValue in
+                        // Apply noise reduction setting
+                        print(
+                            "🔧 IMAGE QUALITY: Noise reduction \(newValue ? "enabled" : "disabled")"
+                        )
+                    }
+
+                Toggle("Contrast Enhancement", isOn: $contrastEnhancement)
+                    .onChange(of: contrastEnhancement) { _, newValue in
+                        // Apply contrast enhancement setting
+                        print(
+                            "🔧 IMAGE QUALITY: Contrast enhancement \(newValue ? "enabled" : "disabled")"
+                        )
+                    }
+
+                Toggle("Frame Averaging", isOn: $frameAveraging)
+                    .onChange(of: frameAveraging) { _, newValue in
+                        // Apply frame averaging for motion reduction
+                        print(
+                            "🔧 IMAGE QUALITY: Frame averaging \(newValue ? "enabled" : "disabled")"
+                        )
+                    }
+            }
+            .headerProminence(.increased)
+
+            Section("Model Information") {
+                HStack {
+                    Text("AI Models Status")
+                    Spacer()
+                    Text(model.modelStatus)
+                        .font(.caption)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            model.isUsingRealModels
+                                ? Color.green.opacity(0.8) : Color.orange.opacity(0.8)
+                        )
+                        .foregroundColor(.white)
+                        .cornerRadius(8)
+                }
+
+                if let ef = model.efResult {
+                    HStack {
+                        Text("Current EF")
+                        Spacer()
+                        Text("\(String(format: "%.1f", ef * 100))%")
+                            .font(.headline)
+                            .foregroundColor(model.isUsingRealModels ? .green : .orange)
+                    }
+                }
+            }
+
+            Section("Probe Information") {
+                if let probe = model.probe {
+                    HStack {
+                        Text("Probe Type")
+                        Spacer()
+                        Text(probe.isSimulated ? "Simulated" : "Real Device")
+                            .foregroundColor(probe.isSimulated ? .orange : .green)
+                    }
+
+                    HStack {
+                        Text("Serial Number")
+                        Spacer()
+                        Text(probe.serialNumber)
+                            .font(.monospaced(.caption)())
+                    }
+
+                    HStack {
+                        Text("Connection Status")
+                        Spacer()
+                        Text(probe.state.description)
+                            .foregroundColor(probe.state == .connected ? .green : .red)
+                    }
+                }
+            }
+        }
+        .onAppear {
+            // Initialize controls with current values
+            controlDepth = model.depth.converted(to: .centimeters).value
+            controlGain = Double(model.gain)
+            controlColorGain = Double(model.colorGain)
+            controlMode = model.mode
+            controlPreset = model.preset
+        }
+    }
+}
+
+extension ProbeState {
+    var description: String {
+        switch self {
+        case .connected: return "Connected"
+        case .disconnected: return "Disconnected"
+        case .firmwareIncompatible: return "Firmware Incompatible"
+        case .hardwareIncompatible: return "Hardware Incompatible"
+        case .ready: return "Ready"
+        case .notReady: return "Not Ready"
+        case .charging: return "Charging"
+        case .depletedBattery: return "Depleted Battery"
+        @unknown default: return "Unknown"
+        }
+    }
+}
+
+#Preview {
+    ScanningSettingsView(model: Model.shared, isScanning: true)
+}

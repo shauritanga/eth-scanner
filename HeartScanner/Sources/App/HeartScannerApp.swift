@@ -1,12 +1,53 @@
 import SwiftUI
 
-let clientKey = "E4BEB4-5955BC-CFC9E6-FB5825-EC2974-V3"
 @main
 struct HeartScannerApp: App {
+    @State private var model: Model?
+    @State private var isLoading = true
+    @State private var loadingError: Error?
+
     var body: some Scene {
         WindowGroup {
-            ContentView(model: Model.shared)
-                .preferredColorScheme(.dark)
+            Group {
+                if isLoading {
+                    SplashView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let model = model {
+                    ContentView(model: model)
+                        .preferredColorScheme(.dark)
+                } else {
+                    VStack {
+                        Text("Failed to initialize app")
+                        if let error = loadingError {
+                            Text(error.localizedDescription)
+                                .foregroundColor(.red)
+                        }
+                        Button("Retry") {
+                            Task {
+                                await initializeModel()
+                            }
+                        }
+                    }
+                    .padding()
+                }
+            }
+            .task {
+                await initializeModel()
+            }
+        }
+    }
+
+    private func initializeModel() async {
+        isLoading = true
+        loadingError = nil
+
+        do {
+            model = try await Model.create()
+            isLoading = false
+        } catch {
+            loadingError = error
+            isLoading = false
+            print("Failed to initialize model: \(error)")
         }
     }
 }

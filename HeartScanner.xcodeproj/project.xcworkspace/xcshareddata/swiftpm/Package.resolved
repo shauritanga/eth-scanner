@@ -1,0 +1,15 @@
+{
+  "originHash" : "86feb78d47e97b9dcea3fe3168c1c0e1dca293d9d82ad6451e5af71f8dc8448c",
+  "pins" : [
+    {
+      "identity" : "imagingsdk-ios",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ButterflyNetwork/ImagingSDK-iOS",
+      "state" : {
+        "revision" : "06a32d949c40e3520877f7f353f03c7c9a476160",
+        "version" : "1.2.4"
+      }
+    }
+  ],
+  "version" : 3
+}
