@@ -17,8 +17,9 @@ struct AppConstants {
     static let efLowerThreshold: Float = 0.2
     static let efUpperThreshold: Float = 0.8
 
-    // Frame processing optimization
-    static let frameProcessingInterval: TimeInterval = 0.15  // Reduced to 150ms for better responsiveness
+    // Frame processing optimization - MEDICAL GRADE PERFORMANCE
+    static let frameProcessingInterval: TimeInterval = 0.2  // 200ms for smooth medical imaging
+    static let aiProcessingInterval: TimeInterval = 0.5  // 500ms for AI models (separate from frame display)
 
     // Image quality settings
     static let imageCompressionQuality: Double = 0.9  // Higher quality for better clarity

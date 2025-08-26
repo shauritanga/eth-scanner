@@ -40,7 +40,8 @@ class EFModel {
             }
 
             let config = MLModelConfiguration()
-            config.computeUnits = .all
+            // BALANCED PERFORMANCE: Use CPU and Neural Engine for good performance with reasonable thermal load
+            config.computeUnits = .cpuAndNeuralEngine
 
             self.model = try MLModel(contentsOf: finalURL, configuration: config)
             self.isModelAvailable = true
@@ -106,6 +107,20 @@ class EFModel {
 
             print("EF Model - Available output features: \(prediction.featureNames)")
 
+            // Enhanced debugging: Print all output features and their values
+            for featureName in prediction.featureNames {
+                if let feature = prediction.featureValue(for: featureName) {
+                    print("🔍 EF Model Output Feature: \(featureName)")
+                    if let multiArray = feature.multiArrayValue {
+                        print("  Shape: \(multiArray.shape)")
+                        print("  Data type: \(multiArray.dataType)")
+                        print("  Value: \(multiArray[0].floatValue)")
+                    } else {
+                        print("  Value: \(feature)")
+                    }
+                }
+            }
+
             guard let output = prediction.featureValue(for: "var_596")?.multiArrayValue,
                 output.shape == [1, 1]
             else {
@@ -120,7 +135,9 @@ class EFModel {
             }
 
             let rawEF = output[0].floatValue
-            print("EF Model - Raw output value: \(rawEF)")
+            print("🔍 EF Model - Raw output value: \(rawEF)")
+            print("🔍 EF Model - Output array shape: \(output.shape)")
+            print("🔍 EF Model - Output data type: \(output.dataType)")
 
             // Normalize the EF value based on the model's output range
             let normalizedEF = normalizeEFOutput(rawEF)
@@ -143,8 +160,10 @@ class EFModel {
         }
 
         print(
-            "EFModel: Processing \(frames.count) real ultrasound frames, interpolating to 32 frames"
+            "🔍 EFModel: Processing \(frames.count) real ultrasound frames, interpolating to 32 frames"
         )
+        print("🔍 EFModel: Input array shape: \(multiArray.shape)")
+        print("🔍 EFModel: Input data type: \(multiArray.dataType)")
 
         // Create 32 frames from available frames using temporal interpolation
         let availableFrames = frames.count
@@ -183,6 +202,34 @@ class EFModel {
                 }
             }
         }
+
+        // Debug: Check input data statistics
+        var minVal: Float = Float.greatestFiniteMagnitude
+        var maxVal: Float = -Float.greatestFiniteMagnitude
+        var sumVal: Float = 0.0
+        var count = 0
+
+        for channel in 0..<3 {
+            for frame in 0..<32 {
+                for y in 0..<112 {
+                    for x in 0..<112 {
+                        let index = [0, channel, frame, y, x] as [NSNumber]
+                        let value = multiArray[index].floatValue
+                        minVal = min(minVal, value)
+                        maxVal = max(maxVal, value)
+                        sumVal += value
+                        count += 1
+                    }
+                }
+            }
+        }
+
+        let avgVal = sumVal / Float(count)
+        print("🔍 EFModel Input Statistics:")
+        print("  Min pixel value: \(minVal)")
+        print("  Max pixel value: \(maxVal)")
+        print("  Average pixel value: \(avgVal)")
+        print("  Total pixels: \(count)")
 
         return multiArray
     }
@@ -260,32 +307,42 @@ class EFModel {
     }
 
     private func normalizeEFOutput(_ rawValue: Float) -> Float {
+        print("🔍 EF Normalization - Raw input: \(rawValue)")
+
         // The model might output values in different ranges. Let's handle common cases:
 
         // Case 1: If the value is already in 0-1 range (most likely)
         if rawValue >= 0.0 && rawValue <= 1.0 {
+            print("🔍 EF Normalization - Case 1: Value in 0-1 range, returning as-is")
             return rawValue
         }
 
         // Case 2: If the value is in 0-100 range (percentage)
         if rawValue >= 0.0 && rawValue <= 100.0 {
-            return rawValue / 100.0
+            let normalized = rawValue / 100.0
+            print("🔍 EF Normalization - Case 2: Value in 0-100 range, normalized to \(normalized)")
+            return normalized
         }
 
         // Case 3: If the value is very large (like 5102.7), it might need sigmoid normalization
         if rawValue > 100.0 {
             // Apply sigmoid to normalize large values to 0-1 range
             let sigmoid = 1.0 / (1.0 + exp(-rawValue / 1000.0))  // Scale down large values
+            print("🔍 EF Normalization - Case 3: Large value, sigmoid normalized to \(sigmoid)")
             return Float(sigmoid)
         }
 
         // Case 4: If the value is negative, apply sigmoid
         if rawValue < 0.0 {
             let sigmoid = 1.0 / (1.0 + exp(-rawValue))
+            print("🔍 EF Normalization - Case 4: Negative value, sigmoid normalized to \(sigmoid)")
+            print("🔍 EF Normalization - Sigmoid calculation: 1/(1+exp(-\(rawValue))) = \(sigmoid)")
             return Float(sigmoid)
         }
 
         // Fallback: clamp to reasonable range
-        return max(0.15, min(0.80, rawValue))  // Clamp to medical range
+        let clamped = max(0.15, min(0.80, rawValue))
+        print("🔍 EF Normalization - Fallback: Clamped to \(clamped)")
+        return clamped
     }
 }

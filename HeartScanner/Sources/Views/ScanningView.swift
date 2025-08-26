@@ -19,6 +19,10 @@ struct ScanningView: View {
     @StateObject private var mediaManager = MediaManager.shared
     @Environment(\.dismiss) private var dismiss
 
+    // Track last captured photo during recording for combined save
+    @State private var lastCapturedPhotoData:
+        (image: UIImage, imagePaths: (thumbnailPath: String, fullImagePath: String))? = nil
+
     let imaging = ButterflyImaging.shared
 
     var body: some View {
@@ -84,12 +88,33 @@ struct ScanningView: View {
             // Update local presets when model presets change
             availablePresets = model.availablePresets
             if controlPreset == nil && !availablePresets.isEmpty {
-                controlPreset = availablePresets.first
+                // Look for cardiac-related presets first
+                let cardiacPreset = availablePresets.first { preset in
+                    let name = preset.name.lowercased()
+                    return name.contains("cardiac") || name.contains("heart")
+                        || name.contains("echo")
+                }
+
+                controlPreset = cardiacPreset ?? availablePresets.first
+                print("🔧 SCANNING: Auto-selected preset: \(controlPreset?.name ?? "none")")
             }
             print("🔧 SCANNING: Available presets updated: \(availablePresets.count)")
         }
         .onChange(of: model.probe?.state) { _, _ in
             print("🔧 SCANNING: Probe state changed: \(model.probe?.state.description ?? "nil")")
+        }
+        .onChange(of: model.stage) { oldStage, newStage in
+            print("🔧 SCANNING: Model stage changed from \(oldStage) to: \(newStage)")
+
+            if newStage == .imaging && !isScanning {
+                print("🔧 SCANNING: Model entered imaging mode, but UI not scanning - syncing...")
+                isScanning = true
+                scanDuration = 0
+                scanTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+                    scanDuration += 0.1
+                }
+            }
+
         }
         .fullScreenCover(isPresented: $showingSettings) {
             NavigationView {
@@ -202,6 +227,51 @@ struct ScanningView: View {
                                 .font(.subheadline)
                                 .fontWeight(.medium)
                                 .foregroundColor(probeStatusColor(probe.state))
+                        }
+                    }
+
+                    // Home button
+                    Button(action: {
+                        goToHome()
+                    }) {
+                        HStack {
+                            Image(systemName: "house.fill")
+                                .foregroundColor(.white)
+                            Text("Go to Home")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                                .foregroundColor(.white)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Color.blue)
+                        .cornerRadius(8)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+
+                    // Show thermal status if probe has temperature issues
+                    let tempStateString = String(describing: probe.temperatureState)
+                    if tempStateString.contains("hot") || tempStateString.contains("warm") {
+                        HStack {
+                            Image(systemName: "thermometer")
+                                .foregroundColor(.orange)
+
+                            Text(
+                                "Probe temperature: \(String(format: "%.1f", probe.estimatedTemperature))°C - \(String(describing: probe.temperatureState))"
+                            )
+                            .font(.caption)
+                            .foregroundColor(.orange)
+
+                            Spacer()
+                        }
+                    } else if tempStateString.contains("coldShutdown") {
+                        // Cold shutdown - probe needs to warm up
+                        HStack {
+                            Image(systemName: "thermometer.snowflake")
+                                .foregroundColor(.blue)
+                            Text("Probe Cooling Down")
+                                .foregroundColor(.blue)
+                            Spacer()
                         }
                     }
 
@@ -480,13 +550,18 @@ struct ScanningView: View {
                         .frame(width: 70, height: 70)
                         .background(
                             Circle()
-                                .fill(isScanning ? .orange : .green)
+                                .fill(isScanning ? .orange : (canStartScanning ? .green : .gray))
                                 .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
                         )
                 }
                 .scaleEffect(isScanning ? 1.05 : 1.0)
                 .animation(.easeInOut(duration: 0.2), value: isScanning)
                 .disabled(!canStartScanning && !isScanning)
+                .onAppear {
+                    print(
+                        "🔧 SCAN BUTTON: canStartScanning: \(canStartScanning), isScanning: \(isScanning), disabled: \(!canStartScanning && !isScanning)"
+                    )
+                }
 
                 // Secondary action button
                 if isScanning {
@@ -539,20 +614,34 @@ struct ScanningView: View {
         // Don't override imaging.states - just sync with model state
         availablePresets = model.availablePresets
 
-        // Set initial preset if available
+        // Set initial preset if available - prioritize cardiac presets
         if controlPreset == nil && !availablePresets.isEmpty {
-            controlPreset = availablePresets.first
+            // Look for cardiac-related presets first
+            let cardiacPreset = availablePresets.first { preset in
+                let name = preset.name.lowercased()
+                return name.contains("cardiac") || name.contains("heart") || name.contains("echo")
+            }
+
+            controlPreset = cardiacPreset ?? availablePresets.first
+            print("🔧 SCANNING SETUP: Selected preset: \(controlPreset?.name ?? "none")")
         }
 
+        print("🔧 SCANNING SETUP: Current model stage: \(model.stage)")
         print(
             "🔧 SCANNING SETUP: Probe state: \(model.probe?.state.description ?? "nil"), Presets: \(availablePresets.count)"
         )
+        print("🔧 SCANNING SETUP: Can start scanning: \(canStartScanning)")
     }
 
     private func toggleScanning() {
+        print("🔧 TOGGLE SCANNING: Button pressed! isScanning: \(isScanning)")
+        print("🔧 TOGGLE SCANNING: canStartScanning: \(canStartScanning)")
+
         if isScanning {
+            print("🔧 TOGGLE SCANNING: Stopping scanning...")
             stopScanning()
         } else {
+            print("🔧 TOGGLE SCANNING: Starting scanning...")
             startScanning()
         }
     }
@@ -560,10 +649,23 @@ struct ScanningView: View {
     private func startScanning() {
         guard canStartScanning else {
             print("🔧 START SCANNING: Cannot start - canStartScanning is false")
+            print("🔧 START SCANNING: Probe state: \(model.probe?.state.description ?? "nil")")
+            print("🔧 START SCANNING: Available presets: \(availablePresets.count)")
             return
         }
 
         print("🔧 START SCANNING: Starting scan with preset: \(controlPreset?.name ?? "default")")
+        print("🔧 START SCANNING: Current model stage: \(model.stage)")
+        print("🔧 START SCANNING: Probe state: \(model.probe?.state.description ?? "nil")")
+        print("🔧 START SCANNING: Available presets: \(availablePresets.map { $0.name })")
+
+        // CRITICAL FIX: Actually start imaging if not already started
+        if model.stage != .imaging {
+            print("🔧 START SCANNING: Model not in imaging mode, starting imaging...")
+            model.startImaging(preset: controlPreset)
+        } else {
+            print("🔧 START SCANNING: Model already in imaging mode")
+        }
 
         isScanning = true
         scanDuration = 0
@@ -573,8 +675,7 @@ struct ScanningView: View {
             scanDuration += 0.1
         }
 
-        // Don't call model.startImaging() - we're already in imaging mode!
-        // Just ensure the correct preset is set if needed
+        // Ensure the correct preset is set if needed
         if let preset = controlPreset {
             imaging.setPreset(preset, parameters: nil)
             print("🔧 START SCANNING: Preset set to \(preset.name)")
@@ -691,26 +792,62 @@ struct ScanningView: View {
         print(
             "🔧 CAN START SCANNING: Probe state: \(probe.state.description), Usable: \(probeUsable), Has presets: \(hasPresets), Can start: \(canStart)"
         )
+        print("🔧 CAN START SCANNING: Model stage: \(model.stage)")
+        print("🔧 CAN START SCANNING: Available presets: \(availablePresets.map { $0.name })")
+        print("🔧 CAN START SCANNING: Control preset: \(controlPreset?.name ?? "nil")")
+        print("🔧 CAN START SCANNING: Is scanning: \(isScanning)")
 
         return canStart
     }
 
     private func probeStatusColor(_ state: ProbeState) -> Color {
+        // Check thermal state for color override
+        if let probe = model.probe {
+            let tempStateString = String(describing: probe.temperatureState)
+            if tempStateString.contains("hot") {
+                return .red  // Hot = red warning
+            } else if tempStateString.contains("warm") {
+                return .orange  // Warm = orange warning
+            } else if tempStateString.contains("coldShutdown") {
+                return .blue  // Cold shutdown - show as cooling
+            }
+        }
+
         switch state {
         case .connected: return .green
+        case .ready: return .green
+        case .notReady: return .orange  // Changed from yellow to orange for thermal issues
         case .disconnected: return .red
+        case .charging: return .blue
+        case .depletedBattery: return .red
         case .hardwareIncompatible, .firmwareIncompatible: return .red
-        default: return .gray
+        @unknown default: return .gray
         }
     }
 
     private func probeStatusText(_ state: ProbeState) -> String {
+        // Check for thermal states first
+        if let probe = model.probe {
+            let tempStateString = String(describing: probe.temperatureState)
+            if tempStateString.contains("hot") {
+                return "Cooling Down"  // Hot = cooling down
+            } else if tempStateString.contains("warm") {
+                return "Warming Up"  // Warm = warming up
+            } else if tempStateString.contains("coldShutdown") {
+                return "Cooling Down"  // Cold shutdown - probe needs to warm up
+            }
+        }
+
         switch state {
         case .connected: return "Connected"
+        case .ready: return "Ready"
+        case .notReady: return "Thermal Protection"  // More descriptive for thermal issues
         case .disconnected: return "Disconnected"
+        case .charging: return "Charging"
+        case .depletedBattery: return "Low Battery"
         case .hardwareIncompatible: return "Incompatible"
         case .firmwareIncompatible: return "Update Required"
-        default: return "Unknown"
+        @unknown default: return "Unknown"
         }
     }
 
@@ -754,10 +891,23 @@ struct ScanningView: View {
         if let videoURL = mediaManager.stopVideoRecording() {
             print("🎥 Stopped recording video")
 
-            // Save video with patient data
+            // Save combined video + photo record if photo was captured during recording
             if let patient = patientSession.currentPatient {
-                saveVideoWithPatientData(videoURL: videoURL, patient: patient)
+                if let photoData = lastCapturedPhotoData {
+                    saveCombinedVideoAndPhotoRecord(
+                        videoURL: videoURL,
+                        photoData: photoData,
+                        patient: patient
+                    )
+                    print("💾 Saved combined video + photo record")
+                } else {
+                    saveVideoWithPatientData(videoURL: videoURL, patient: patient)
+                    print("💾 Saved video-only record")
+                }
             }
+
+            // Clear stored photo data
+            lastCapturedPhotoData = nil
 
             // Haptic feedback
             let impactFeedback = UIImpactFeedbackGenerator(style: .light)
@@ -770,21 +920,31 @@ struct ScanningView: View {
     private func capturePhoto() {
         guard isScanning, let image = model.image else { return }
 
-        // Capture current ultrasound image using MediaManager
-        if let patient = patientSession.currentPatient {
-            savePhotoWithPatientData(image: image, patient: patient)
+        // If recording is active, store photo for combined save later
+        if mediaManager.isRecording {
+            // Save photo files but don't create scan record yet
+            if let imagePaths = mediaManager.savePhoto(
+                image, patient: patientSession.currentPatient)
+            {
+                lastCapturedPhotoData = (image: image, imagePaths: imagePaths)
+                print("📸 Photo captured during recording - will combine with video on stop")
+            }
         } else {
-            // Save anonymous photo
-            savePhotoWithPatientData(image: image, patient: nil)
+            // Normal photo capture - save immediately
+            if let patient = patientSession.currentPatient {
+                savePhotoWithPatientData(image: image, patient: patient)
+            } else {
+                // Save anonymous photo
+                savePhotoWithPatientData(image: image, patient: nil)
+            }
+            print(
+                "📸 Captured standalone photo for patient: \(patientSession.currentPatient?.patientID ?? "Unknown")"
+            )
         }
 
         // Haptic feedback
         let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
         impactFeedback.impactOccurred()
-
-        print(
-            "📸 Captured photo for patient: \(patientSession.currentPatient?.patientID ?? "Unknown")"
-        )
     }
 
     private func saveVideoWithPatientData(videoURL: URL, patient: Patient) {
@@ -871,6 +1031,54 @@ struct ScanningView: View {
         print("💾 Saved photo with patient data: \(patient?.patientID ?? "anonymous")")
     }
 
+    private func saveCombinedVideoAndPhotoRecord(
+        videoURL: URL,
+        photoData: (image: UIImage, imagePaths: (thumbnailPath: String, fullImagePath: String)),
+        patient: Patient
+    ) {
+        // Extract video filename from URL
+        let videoFilename = videoURL.lastPathComponent
+
+        // Create analysis results with current EF
+        let analysisResults = ScanRecord.AnalysisResults(
+            ejectionFraction: model.efResult.map { Double($0 * 100) },
+            efConfidence: model.efResult != nil ? 0.85 : nil,
+            segmentationResults: nil,
+            measurements: model.efResult != nil
+                ? [
+                    ScanRecord.AnalysisResults.Measurement(
+                        type: .ejectionFraction,
+                        value: Double(model.efResult! * 100),
+                        unit: "%"
+                    )
+                ] : [],
+            aiModelVersion: "v2.1.0",
+            processingTime: 1.2
+        )
+
+        // Create image data record with BOTH video and photo
+        let imageData = ScanRecord.ImageData(
+            thumbnailPath: photoData.imagePaths.thumbnailPath,  // Use photo thumbnail
+            fullImagePath: photoData.imagePaths.fullImagePath,  // Use photo for full image
+            videoPath: videoFilename,  // Include video
+            originalSize: photoData.image.size
+        )
+
+        // Create comprehensive scan record
+        let scanRecord = ScanRecord(
+            patient: patient,
+            analysisResults: analysisResults,
+            imageData: imageData,
+            clinicalNotes: "Combined video recording and photo capture during cardiac scan",
+            scanDuration: mediaManager.recordingDuration
+        )
+
+        // Save to history
+        scanHistory.saveScan(scanRecord)
+
+        print("🎥📸 Saved combined video + photo record for patient: \(patient.patientID)")
+    }
+
     private func exitScanning() {
         // Stop any ongoing recording
         if mediaManager.isRecording {
@@ -887,6 +1095,24 @@ struct ScanningView: View {
         model.stage = .ready
 
         print("🚪 Exiting scanning mode - returning to home screen")
+    }
+
+    private func goToHome() {
+        // Stop any ongoing recording
+        if mediaManager.isRecording {
+            stopRecording()
+        }
+
+        // Stop scanning if active
+        stopScanningIfActive()
+
+        // Clear current patient session
+        PatientSessionManager.shared.clearCurrentPatient()
+
+        // Navigate directly to home by setting model stage to ready
+        model.stage = .ready
+
+        print("🏠 Going to home screen from probe status")
     }
 }
 

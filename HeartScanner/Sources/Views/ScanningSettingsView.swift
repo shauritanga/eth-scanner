@@ -188,8 +188,8 @@ struct ScanningSettingsView: View {
                     HStack {
                         Text("Connection Status")
                         Spacer()
-                        Text(probe.state.description)
-                            .foregroundColor(probe.state == .connected ? .green : .red)
+                        Text(probeStatusText(probe.state, probe: probe))
+                            .foregroundColor(probeStatusColor(probe.state, probe: probe))
                     }
                 }
             }
@@ -201,6 +201,54 @@ struct ScanningSettingsView: View {
             controlColorGain = Double(model.colorGain)
             controlMode = model.mode
             controlPreset = model.preset
+        }
+    }
+
+    // MARK: - Helper Functions
+
+    private func probeStatusColor(_ state: ProbeState, probe: Probe) -> Color {
+        // Check thermal state for color override (consistent with ScanningView)
+        let tempStateString = String(describing: probe.temperatureState)
+        if tempStateString.contains("hot") {
+            return .red  // Hot = red warning
+        } else if tempStateString.contains("warm") {
+            return .orange  // Warm = orange warning
+        } else if tempStateString.contains("coldShutdown") {
+            return .blue  // Cold shutdown - probe needs to warm up
+        }
+
+        switch state {
+        case .connected, .ready: return .green
+        case .notReady: return .orange  // Thermal protection
+        case .disconnected: return .red
+        case .charging: return .blue
+        case .depletedBattery: return .red
+        case .hardwareIncompatible, .firmwareIncompatible: return .red
+        @unknown default: return .gray
+        }
+    }
+
+    private func probeStatusText(_ state: ProbeState, probe: Probe) -> String {
+        // Check for thermal states first (consistent with ScanningView)
+        let tempStateString = String(describing: probe.temperatureState)
+        if tempStateString.contains("hot") {
+            return "Cooling Down"  // Hot = cooling down
+        } else if tempStateString.contains("warm") {
+            return "Warming Up"  // Warm = warming up
+        } else if tempStateString.contains("coldShutdown") {
+            return "Cooling Down"  // Cold shutdown - probe needs to warm up
+        }
+
+        switch state {
+        case .connected: return "Connected"
+        case .ready: return "Ready"
+        case .notReady: return "Thermal Protection"  // More descriptive for thermal issues
+        case .disconnected: return "Disconnected"
+        case .charging: return "Charging"
+        case .depletedBattery: return "Low Battery"
+        case .hardwareIncompatible: return "Incompatible"
+        case .firmwareIncompatible: return "Update Required"
+        @unknown default: return "Unknown"
         }
     }
 }

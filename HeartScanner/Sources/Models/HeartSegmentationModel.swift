@@ -43,7 +43,8 @@ class HeartSegmentationModel {
             }
 
             let config = MLModelConfiguration()
-            config.computeUnits = .all  // Use Neural Engine if available
+            // BALANCED PERFORMANCE: Use CPU and Neural Engine for good performance with reasonable thermal load
+            config.computeUnits = .cpuAndNeuralEngine  // Use Neural Engine if available
 
             self.model = try MLModel(contentsOf: finalURL, configuration: config)
             self.isModelAvailable = true

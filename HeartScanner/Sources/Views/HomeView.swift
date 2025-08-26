@@ -28,6 +28,15 @@ struct HomeView: View {
                     Text("Device & AI Status")
                 }
 
+                // Thermal Diagnostic (only show when probe is in thermal protection)
+                if model.probe?.state == .notReady {
+                    Section {
+                        thermalDiagnosticCard
+                    } header: {
+                        Text("🔧 Thermal Diagnostic")
+                    }
+                }
+
                 // Navigation Links
                 Section {
                     NavigationLink(value: HomeDestination.newScan) {
@@ -229,22 +238,52 @@ struct HomeView: View {
 
     private var probeConnectionStatus: String {
         guard let probe = model.probe else { return "No Probe" }
+
+        // Check for thermal states first (consistent with ScanningView)
+        let tempStateString = String(describing: probe.temperatureState)
+        if tempStateString.contains("hot") {
+            return "Cooling Down"  // Hot = cooling down
+        } else if tempStateString.contains("warm") {
+            return "Warming Up"  // Warm = warming up
+        } else if tempStateString.contains("coldShutdown") {
+            return probe.isSimulated ? "Simulated Ready" : "Ready"  // SDK BUG: coldShutdown at normal temp
+        }
+
         switch probe.state {
         case .connected: return probe.isSimulated ? "Simulated" : "Connected"
+        case .ready: return probe.isSimulated ? "Simulated Ready" : "Ready"
+        case .notReady: return "Thermal Protection"  // More descriptive for thermal issues
         case .disconnected: return "Disconnected"
+        case .charging: return "Charging"
+        case .depletedBattery: return "Low Battery"
         case .hardwareIncompatible: return "Incompatible"
         case .firmwareIncompatible: return "Update Required"
-        default: return "Unknown"
+        @unknown default: return "Unknown"
         }
     }
 
     private var probeConnectionColor: Color {
         guard let probe = model.probe else { return .red }
+
+        // Check thermal state for color override (consistent with ScanningView)
+        let tempStateString = String(describing: probe.temperatureState)
+        if tempStateString.contains("hot") {
+            return .red  // Hot = red warning
+        } else if tempStateString.contains("warm") {
+            return .orange  // Warm = orange warning
+        } else if tempStateString.contains("coldShutdown") {
+            return probe.isSimulated ? .orange : .green  // SDK BUG: coldShutdown at normal temp
+        }
+
         switch probe.state {
         case .connected: return probe.isSimulated ? .orange : .green
+        case .ready: return probe.isSimulated ? .orange : .green
+        case .notReady: return .orange  // Thermal protection
         case .disconnected: return .red
+        case .charging: return .blue
+        case .depletedBattery: return .red
         case .hardwareIncompatible, .firmwareIncompatible: return .red
-        default: return .gray
+        @unknown default: return .gray
         }
     }
 
@@ -276,11 +315,153 @@ struct HomeView: View {
     }
 
     private func updateCanStartScanning() {
-        canStartScanning = model.probe?.state == .connected
+        guard let probe = model.probe else {
+            print("🔧 HOME CAN START: No probe available")
+            canStartScanning = false
+            return
+        }
+
+        // Match the logic from ScanningView - allow connected, ready, or notReady states
+        let probeUsable =
+            probe.state == .connected || probe.state == .ready || probe.state == .notReady
+        let hasPresets = !availablePresets.isEmpty
+        canStartScanning = probeUsable && hasPresets
+
+        print(
+            "🔧 HOME CAN START: Probe state: \(probe.state.description), Usable: \(probeUsable), Has presets: \(hasPresets), Can start: \(canStartScanning)"
+        )
     }
 
     private func refreshDeviceStatus() async {
         try? await Task.sleep(nanoseconds: 1_000_000_000)
+    }
+
+    // MARK: - Thermal Diagnostic Functions
+
+    private var thermalDiagnosticCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "thermometer.medium")
+                    .font(.title2)
+                    .foregroundColor(.orange)
+                Text("Thermal Protection Active")
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                Spacer()
+            }
+
+            if let probe = model.probe {
+                VStack(alignment: .leading, spacing: 8) {
+                    diagnosticRow("Probe State", value: String(describing: probe.state))
+                    diagnosticRow(
+                        "Temperature State", value: String(describing: probe.temperatureState))
+                    diagnosticRow(
+                        "Current Temperature",
+                        value: String(format: "%.1f°C", probe.estimatedTemperature))
+                    diagnosticRow(
+                        "Battery Level",
+                        value: String(format: "%.0f%%", probe.batteryPercentage * 100))
+                    diagnosticRow("Serial Number", value: probe.serialNumber)
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Button("🔄 Force Refresh Probe Status") {
+                        refreshProbeStatus()
+                    }
+                    .buttonStyle(.bordered)
+                    .foregroundColor(.blue)
+
+                    Button("📋 Print Full Diagnostic") {
+                        printThermalDiagnostic()
+                    }
+                    .buttonStyle(.bordered)
+                    .foregroundColor(.orange)
+                }
+            }
+        }
+        .padding()
+        .background(Color(.secondarySystemGroupedBackground))
+        .cornerRadius(12)
+    }
+
+    private func diagnosticRow(_ title: String, value: String) -> some View {
+        HStack {
+            Text(title).font(.caption).foregroundColor(.secondary)
+            Spacer()
+            Text(value).font(.caption).fontWeight(.medium)
+        }
+    }
+
+    private func refreshProbeStatus() {
+        print("🔄 FORCE REFRESH: Manually refreshing probe status...")
+        // Force a refresh by accessing probe properties
+        if let probe = model.probe {
+            print(
+                "🔧 PROBE REFRESH: State=\(probe.state), Temp=\(probe.estimatedTemperature)°C, TempState=\(probe.temperatureState)"
+            )
+        }
+    }
+
+    private func printThermalDiagnostic() {
+        print("=== 🔧 THERMAL DIAGNOSTIC REPORT ===")
+        print("Timestamp: \(Date())")
+
+        if let probe = model.probe {
+            print("📱 PROBE INFORMATION:")
+            print("  - State: \(probe.state)")
+            print("  - Temperature State: \(probe.temperatureState)")
+            print("  - Current Temperature: \(probe.estimatedTemperature)°C")
+            print("  - Unit Relative Temperature: \(probe.unitRelativeTemperature)")
+            print("  - Battery: \(String(format: "%.0f%%", probe.batteryPercentage * 100))")
+            print("  - Battery State: \(probe.batteryState)")
+            print("  - Serial Number: \(probe.serialNumber)")
+            print("  - Type: \(probe.type)")
+            print("  - Is Simulated: \(probe.isSimulated)")
+
+            print("🔍 THERMAL ANALYSIS:")
+            let tempStateString = String(describing: probe.temperatureState)
+            if tempStateString.contains("hot") {
+                print("  - Status: OVERHEATED - Probe is too hot")
+                print("  - Action: Wait for cooling (5-15 minutes)")
+            } else if tempStateString.contains("warm") {
+                print("  - Status: WARMING - Probe is getting warm")
+                print("  - Action: Monitor temperature, consider breaks")
+            } else if tempStateString.contains("coldShutdown") {
+                print("  - Status: COLD SHUTDOWN - Known SDK bug or cooling recovery")
+                print("  - Action: This may be a false positive - try disconnecting/reconnecting")
+            } else {
+                print("  - Status: NORMAL - Temperature state appears normal")
+                print("  - Issue: Probe state is notReady but temperature seems fine")
+            }
+
+            print("💡 RECOMMENDATIONS:")
+            if probe.estimatedTemperature > 40.0 {
+                print(
+                    "  - Temperature is high (\(probe.estimatedTemperature)°C) - genuine thermal protection"
+                )
+                print("  - Disconnect probe and let it cool for 10-15 minutes")
+            } else if probe.estimatedTemperature < 35.0 {
+                print(
+                    "  - Temperature is normal (\(probe.estimatedTemperature)°C) - possible SDK bug"
+                )
+                print(
+                    "  - Try: 1) Disconnect/reconnect probe 2) Restart app 3) Update to SDK 2.0.0")
+            } else {
+                print("  - Temperature is borderline (\(probe.estimatedTemperature)°C)")
+                print("  - Wait 5 minutes and check again")
+            }
+        } else {
+            print("❌ NO PROBE DETECTED")
+        }
+
+        print("🔧 APP STATE:")
+        print("  - Model Stage: \(model.stage)")
+        print("  - License State: \(model.licenseState)")
+        print("  - Available Presets: \(model.availablePresets.count)")
+
+        print("=== END DIAGNOSTIC REPORT ===")
     }
 }
 

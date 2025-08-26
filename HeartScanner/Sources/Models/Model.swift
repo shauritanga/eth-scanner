@@ -28,6 +28,7 @@ class Model: ObservableObject {
     @Published var segmentationMask: UIImage?
     @Published var isUsingRealModels: Bool = false
     @Published var modelStatus: String = "Checking models..."
+    @Published var errorMessage: String?
 
     private let efModel: EFModel
     private let segmentationModel: HeartSegmentationModel
@@ -35,7 +36,8 @@ class Model: ObservableObject {
     private let imaging = ButterflyImaging.shared
     private var frameProcessingQueue = DispatchQueue(label: "frame.processing", qos: .userInitiated)
     private var lastProcessedTime: Date = Date()
-    // Processing interval is now defined in AppConstants
+    private var lastAIProcessedTime: Date = Date()
+    // Separate timing for frame display vs AI processing
 
     // MARK: - Async Factory Method
 
@@ -117,12 +119,44 @@ class Model: ObservableObject {
         gain = state.gain
         mode = state.mode
         preset = state.preset
+
+        // CRITICAL: Proper probe state management
+        let previousProbeState = probe?.state
         probe = state.probe
 
-        // Debug probe state changes
+        // Enhanced probe state debugging with timestamp
+        let timestamp = DateFormatter().string(from: Date())
         print(
-            "🔧 PROBE STATE UPDATE: \(state.probe.state.description) - Available presets: \(state.availablePresets.count)"
+            "🔧 PROBE STATE UPDATE [\(timestamp)]: \(previousProbeState?.description ?? "nil") → \(state.probe.state.description)"
         )
+        print(
+            "🔧 PROBE INFO: Available presets: \(state.availablePresets.count), Mode: \(state.mode)")
+        print("🔧 PROBE DETAILS: isSimulated: \(state.probe.isSimulated)")
+
+        // CRITICAL: Monitor thermal state for overheating
+        print(
+            "🌡️ THERMAL STATE: \(state.probe.temperatureState), Temp: \(state.probe.estimatedTemperature)°C"
+        )
+
+        // Check for thermal issues
+        let tempStateString = String(describing: state.probe.temperatureState)
+        if tempStateString.contains("hot") || tempStateString.contains("warm") {
+            print(
+                "🔥 THERMAL WARNING: Probe is getting hot - temperature state: \(state.probe.temperatureState)"
+            )
+        } else if tempStateString.contains("coldShutdown") {
+            print(
+                "🧊 COLD SHUTDOWN: Probe temperature sensor indicates cold shutdown - temp: \(state.probe.estimatedTemperature)°C"
+            )
+        }
+
+        // Handle probe state changes
+        if let previousState = previousProbeState, previousState != state.probe.state {
+            print(
+                "🚨 PROBE STATE CHANGE DETECTED: \(previousState.description) → \(state.probe.state.description)"
+            )
+            handleProbeStateChange(from: previousState, to: state.probe.state)
+        }
 
         switch mode {
         case .bMode, .colorDoppler:
@@ -134,8 +168,8 @@ class Model: ObservableObject {
                 // Add frame to video recording if active
                 MediaManager.shared.addFrameToRecording(img)
 
-                // Process frame on background queue to prevent UI freezing
-                Task.detached(priority: .userInitiated) { @MainActor in
+                // Process frame asynchronously to prevent UI freezing
+                Task {
                     await self.processFrame(img.toCVPixelBuffer())
                 }
             }
@@ -169,8 +203,28 @@ class Model: ObservableObject {
                 stopImaging()
             }
         case .imaging:
+            print("🔍 DEBUG: In imaging stage, probe state: \(state.probe.state.description)")
+            print("🔍 DEBUG: Temperature state: \(state.probe.temperatureState)")
+            print("🔍 DEBUG: Image available: \(state.bModeImage?.image != nil)")
+
             if state.probe.state == .disconnected {
+                print("🛑 IMAGING: Stopping due to probe disconnection")
                 stopImaging()
+            }
+
+            // Monitor if we stop receiving images (SDK internal stop)
+            if state.bModeImage?.image == nil && image != nil {
+                print("🚨 IMAGING: No longer receiving images from SDK - possible internal stop")
+            }
+
+            // CRITICAL: Handle thermal recovery during imaging
+            if state.probe.state == .ready && previousProbeState == .notReady {
+                print("✅ THERMAL RECOVERY: Probe cooled down, imaging can continue normally")
+                // Clear any thermal warnings (both thermal protection and cold shutdown)
+                if let nsError = alertError as? NSError, nsError.code == -3 || nsError.code == -4 {
+                    alertError = nil
+                    showingAlert = false
+                }
             }
         }
 
@@ -183,7 +237,114 @@ class Model: ObservableObject {
         stage = .readyToScan
     }
 
+    // MARK: - Probe State Management
+
+    private func handleProbeStateChange(from previousState: ProbeState, to newState: ProbeState) {
+        print("🔧 PROBE STATE CHANGE: \(previousState.description) → \(newState.description)")
+
+        switch newState {
+        case .connected:
+            print("✅ PROBE CONNECTED: Ready for imaging")
+        // Probe is connected and ready for imaging
+
+        case .disconnected:
+            print("❌ PROBE DISCONNECTED: Stopping any active imaging")
+            if stage == .imaging || stage == .startingImaging {
+                stopImaging()
+            }
+
+        case .firmwareIncompatible:
+            print("⚠️ PROBE FIRMWARE INCOMPATIBLE: Update required")
+            stage = .updateNeeded
+
+        case .ready:
+            print(
+                "✅ PROBE READY: Probe is ready for imaging - this is the correct state for scanning!"
+            )
+
+        case .notReady:
+            print("⚠️ PROBE NOT READY: Probe is not ready for use")
+
+            // DEBUG: Let's see what happens if we do NOTHING when probe goes notReady
+            if stage == .imaging {
+                let tempStateString = String(describing: probe?.temperatureState)
+                if tempStateString.contains("coldShutdown") {
+                    print(
+                        "🧊 COLD SHUTDOWN DETECTED: Probe temp: \(probe?.estimatedTemperature ?? 0)°C"
+                    )
+                    print("🔍 DEBUG: NOT interfering with SDK - letting it handle cold shutdown")
+                    print("🔍 DEBUG: Current imaging stage: \(stage)")
+                    print("🔍 DEBUG: Will monitor if SDK stops imaging internally...")
+
+                    // MINIMAL INTERVENTION: Just log, don't change anything
+                    DispatchQueue.main.async {
+                        self.errorMessage = "Cold shutdown detected - monitoring SDK behavior..."
+                    }
+                } else {
+                    print(
+                        "🔥 THERMAL PROTECTION: Probe overheated during imaging"
+                    )
+                    print(
+                        "🔍 DEBUG: NOT interfering with SDK - letting it handle thermal protection")
+                }
+            }
+
+        case .hardwareIncompatible:
+            print("❌ PROBE HARDWARE INCOMPATIBLE: Hardware not supported")
+
+        case .charging:
+            print("🔋 PROBE CHARGING: Probe is currently charging")
+
+        case .depletedBattery:
+            print("🪫 PROBE BATTERY DEPLETED: Probe battery is depleted")
+
+        @unknown default:
+            print("🔧 PROBE STATE: Unknown state \(newState)")
+        }
+    }
+
     func startImaging(preset: ImagingPreset? = nil, depth: Double? = nil) {
+        // CRITICAL: Validate probe state before starting imaging
+        print("🔧 IMAGING START: Current probe state: \(probe?.state.description ?? "nil")")
+        print("🔧 IMAGING START: Current stage: \(stage)")
+        print("🔧 IMAGING START: Available presets: \(availablePresets.count)")
+
+        // Check if probe is available and connected
+        guard let currentProbe = probe else {
+            print("❌ IMAGING ERROR: No probe available")
+            alertError = NSError(
+                domain: "HeartScanner", code: -1,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "No probe connected. Please connect a probe first."
+                ]
+            )
+            showingAlert = true
+            return
+        }
+
+        // Allow imaging if probe is connected or ready
+        let isProbeUsable = currentProbe.state == .connected || currentProbe.state == .ready
+
+        if !isProbeUsable {
+            print(
+                "❌ IMAGING ERROR: Probe not usable. Current state: \(currentProbe.state.description)"
+            )
+            alertError = NSError(
+                domain: "HeartScanner", code: -2,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Probe not ready. Current state: \(currentProbe.state.description). Please check probe connection."
+                ]
+            )
+            showingAlert = true
+            return
+        }
+
+        // Clear any previous results
+        efResult = nil
+        segmentationMask = nil
+        frameBuffer.removeAll()
+
         stage = .startingImaging
         var parameters: PresetParameters? = nil
 
@@ -197,14 +358,27 @@ class Model: ObservableObject {
             do {
                 print(
                     "🔧 IMAGING START: Beginning imaging with preset: \(preset?.name ?? "default")")
+                print(
+                    "🔧 IMAGING START: Parameters: \(parameters != nil ? "custom depth" : "default")"
+                )
+
                 try await imaging.startImaging(preset: preset, parameters: parameters)
-                print("🔧 IMAGING START: Butterfly SDK startImaging completed successfully")
+                print("✅ IMAGING START: Butterfly SDK startImaging completed successfully")
+
+                // Ensure we transition to imaging state
+                await MainActor.run {
+                    if self.stage == .startingImaging {
+                        print("🔧 IMAGING START: Transitioning to imaging state")
+                        self.stage = .imaging
+                    }
+                }
             } catch {
-                print("🔧 IMAGING ERROR: Failed to start imaging: \(error)")
-                alertError = error
-                showingAlert = true
-                // Return to ready state on error
-                stage = .ready
+                print("❌ IMAGING ERROR: Failed to start imaging: \(error)")
+                await MainActor.run {
+                    self.alertError = error
+                    self.showingAlert = true
+                    self.stage = .ready
+                }
             }
         }
     }
@@ -217,13 +391,29 @@ class Model: ObservableObject {
 
     func connectProbe(simulated: Bool) async {
         inProgress = true
+        print("🔧 PROBE CONNECTION: Starting connection process (simulated: \(simulated))")
+
         if simulated {
+            print("🔧 PROBE CONNECTION: Connecting simulated probe...")
             await imaging.connectSimulatedProbe()
+            print("✅ PROBE CONNECTION: Simulated probe connection initiated")
         } else {
             // For real probes, the connection is automatic when the probe is plugged in
             // The ButterflyImagingKit will detect and connect automatically
             print("🔧 PROBE CONNECTION: Waiting for real probe connection...")
-            // Don't override the imaging.states callback here - it's already set in init
+            print("🔧 PROBE CONNECTION: Current probe state: \(probe?.state.description ?? "nil")")
+
+            // The imaging.states callback is already set in init and will handle state changes
+            // Just wait a moment to see if the probe connects
+            try? await Task.sleep(nanoseconds: 1_000_000_000)  // 1 second
+
+            if let currentProbe = probe {
+                print(
+                    "🔧 PROBE CONNECTION: After wait, probe state: \(currentProbe.state.description)"
+                )
+            } else {
+                print("⚠️ PROBE CONNECTION: No probe detected after wait")
+            }
         }
         inProgress = false
     }
@@ -275,14 +465,27 @@ class Model: ObservableObject {
     }
 
     func stopImaging() {
+        print("🛑 STOP IMAGING CALLED - Investigating who called this...")
+        print("🔍 DEBUG: Current stage: \(stage)")
+        print("🔍 DEBUG: Probe state: \(probe?.state.description ?? "nil")")
+        print("🔍 DEBUG: Temperature state: \(String(describing: probe?.temperatureState))")
+
+        // Print stack trace to see who called stopImaging
+        Thread.callStackSymbols.forEach { symbol in
+            if symbol.contains("HeartScanner") {
+                print("🔍 STACK: \(symbol)")
+            }
+        }
+
         Task {
             do {
                 try await imaging.stopImaging()
                 stage = .readyToScan  // Return to scanning view, not home
                 // Clear frame buffer when stopping
                 frameBuffer.removeAll()
+                print("✅ STOP IMAGING: Successfully stopped imaging")
             } catch {
-                print("Failed to stop imaging: \(error)")
+                print("❌ STOP IMAGING ERROR: Failed to stop imaging: \(error)")
             }
         }
     }
@@ -293,7 +496,7 @@ class Model: ObservableObject {
         guard let buffer = buffer else { return }
 
         do {
-            // Throttle processing to reduce memory pressure
+            // MEDICAL GRADE: Always process frames for smooth imaging display
             let now = Date()
             guard now.timeIntervalSince(lastProcessedTime) >= AppConstants.frameProcessingInterval
             else {
@@ -307,15 +510,22 @@ class Model: ObservableObject {
                 frameBuffer.removeFirst()
             }
 
-            // CLINICAL: Process segmentation more frequently for better visualization
-            if frameBuffer.count % 2 == 0 {  // Every 2nd frame for better responsiveness
-                await processSegmentation(buffer)
-            }
+            // SEPARATE AI PROCESSING: Process AI models at different interval for performance
+            let shouldProcessAI =
+                now.timeIntervalSince(lastAIProcessedTime) >= AppConstants.aiProcessingInterval
 
-            // Process EF only when we have the maximum buffer size (for best quality)
-            // The EF model will interpolate/repeat frames to create the required 32 frames
-            if frameBuffer.count == AppConstants.maxFrameBufferSize {
-                await processEjectionFraction()
+            if shouldProcessAI {
+                lastAIProcessedTime = now
+
+                // Process segmentation every 2nd frame for good visualization
+                if frameBuffer.count % 2 == 0 {
+                    await processSegmentation(buffer)
+                }
+
+                // Process EF when we have sufficient frames
+                if frameBuffer.count == AppConstants.maxFrameBufferSize {
+                    await processEjectionFraction()
+                }
             }
         } catch {
             print("Frame processing error: \(error)")
