@@ -106,38 +106,66 @@ final class MultiOutputModel {
             }
 
             let prediction = try model.prediction(from: provider)
-            // Debug: list available outputs once
-            print("Multi-Output prediction features: \(prediction.featureNames.sorted())")
+            // Debug: list available outputs
+            let featureNames = prediction.featureNames.sorted()
+            print("Multi-Output prediction features: \(featureNames)")
 
             func scalar(_ key: String) -> Double? {
-                if let v = prediction.featureValue(for: key) {
-                    if v.type == .double { return v.doubleValue }
-                    if let ma = v.multiArrayValue { return ma[0].doubleValue }
-                    if v.type == .int64 { return Double(v.int64Value) }
+                guard let v = prediction.featureValue(for: key) else { return nil }
+                switch v.type {
+                case .double: return v.doubleValue
+                case .int64: return Double(v.int64Value)
+                case .multiArray: return v.multiArrayValue?[0].doubleValue
+                default: return nil
+                }
+            }
+
+            // Try a list of possible keys (models may rename outputs)
+            func scalarAny(_ candidateKeys: [String]) -> Double? {
+                for k in candidateKeys { if let val = scalar(k) { return val } }
+                // Fallback: any key containing substring (case-insensitive)
+                if let efKey = featureNames.first(where: { $0.lowercased().contains("ef") }) {
+                    return scalar(efKey)
                 }
                 return nil
             }
 
             var out = Outputs()
-            // Apply calibration multipliers from AppConstants
-            if let v = scalar("EF_prediction") {
-                out.efPercent = (v * AppConstants.Calibration.efPercent).clampedPercent()
+            // EF may be 0-1 or 0-100; normalize to percent
+            if let rawEF = scalarAny([
+                "EF_prediction", "ef", "EF", "ejection_fraction", "EF_percent",
+            ]) {
+                let efPct = (rawEF <= 1.0 ? rawEF * 100.0 : rawEF)
+                out.efPercent = (efPct * AppConstants.Calibration.efPercent).clampedPercent()
             }
-            if let v = scalar("LVEDV_prediction") { out.edvMl = v * AppConstants.Calibration.edvMl }
-            if let v = scalar("LVESV_prediction") { out.esvMl = v * AppConstants.Calibration.esvMl }
-            if let v = scalar("LVIDd_prediction") {
+            if let v = scalarAny(["LVEDV_prediction", "edv", "EDV"]) {
+                out.edvMl = v * AppConstants.Calibration.edvMl
+            }
+            if let v = scalarAny(["LVESV_prediction", "esv", "ESV"]) {
+                out.esvMl = v * AppConstants.Calibration.esvMl
+            }
+
+            // Fallback: derive EF from EDV/ESV if EF missing or suspiciously small
+            if out.efPercent == nil || out.efPercent! < 5.0, let edv = out.edvMl,
+                let esv = out.esvMl, edv > 0
+            {
+                let efDerived = max(0.0, min((edv - esv) / edv * 100.0, 100.0))
+                out.efPercent = efDerived
+            }
+
+            if let v = scalarAny(["LVIDd_prediction", "lvidd", "LVIDd"]) {
                 out.lviddCm = v * AppConstants.Calibration.lviddCm
             }
-            if let v = scalar("LVIDs_prediction") {
+            if let v = scalarAny(["LVIDs_prediction", "lvids", "LVIDs"]) {
                 out.lvidsCm = v * AppConstants.Calibration.lvidsCm
             }
-            if let v = scalar("IVSd_prediction") {
+            if let v = scalarAny(["IVSd_prediction", "ivsd", "IVSd"]) {
                 out.ivsdCm = v * AppConstants.Calibration.ivsdCm
             }
-            if let v = scalar("LVPWd_prediction") {
+            if let v = scalarAny(["LVPWd_prediction", "lvpwd", "LVPWd"]) {
                 out.lvpwdCm = v * AppConstants.Calibration.lvpwdCm
             }
-            if let v = scalar("TAPSE_prediction") {
+            if let v = scalarAny(["TAPSE_prediction", "tapse", "TAPSE"]) {
                 out.tapseMm = v * AppConstants.Calibration.tapseMm
             }
             return out

@@ -14,6 +14,9 @@ struct ScanningView: View {
     @State private var isScanning = false
     @State private var scanDuration: TimeInterval = 0
     @State private var scanTimer: Timer?
+    @State private var efTimer: Timer?
+    @State private var liveEFPercent: Double?
+
     @StateObject private var patientSession = PatientSessionManager.shared
     @StateObject private var scanHistory = ScanHistoryManager.shared
     @StateObject private var mediaManager = MediaManager.shared
@@ -107,6 +110,14 @@ struct ScanningView: View {
                 print("🔧 SCANNING: Model entered imaging mode, but UI not scanning - syncing...")
                 isScanning = true
                 scanDuration = 0
+                // Start/stop live EF polling with stage
+                if newStage == .imaging {
+                    startLiveEFUpdates()
+                } else {
+                    stopLiveEFUpdates()
+                    liveEFPercent = nil
+                }
+
                 scanTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
                     scanDuration += 0.1
                 }
@@ -378,6 +389,19 @@ struct ScanningView: View {
                         .font(.caption)
                         .fontWeight(.medium)
                         .foregroundColor(.white.opacity(0.9))
+                    // Live EF readout (right-aligned)
+                    if isScanning, let ef = liveEFPercent {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text("EF")
+                                .font(.caption2)
+                                .foregroundColor(.white.opacity(0.7))
+                            Text("\(String(format: "%.1f", ef))%")
+                                .font(.headline)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.white)
+                        }
+                    }
+
                 }
             }
 
@@ -653,6 +677,9 @@ struct ScanningView: View {
             scanDuration += 0.1
         }
 
+        stopLiveEFUpdates()
+        liveEFPercent = nil
+
         // Ensure the correct preset is set if needed
         if let preset = controlPreset {
             imaging.setPreset(preset, parameters: nil)
@@ -678,9 +705,35 @@ struct ScanningView: View {
     }
 
     private func stopScanningIfActive() {
+        // Start/stop live EF on manual toggle too
+        if isScanning {
+            startLiveEFUpdates()
+        } else {
+            stopLiveEFUpdates()
+            liveEFPercent = nil
+        }
+
         if isScanning {
             stopScanning()
         }
+    }
+
+    // Live EF updates timer
+    private func startLiveEFUpdates() {
+        efTimer?.invalidate()
+        efTimer = Timer.scheduledTimer(
+            withTimeInterval: AppConstants.aiProcessingInterval, repeats: true
+        ) { _ in
+            guard isScanning, let img = model.image else { return }
+            if let ef = MultiOutputModel.shared.predict(image: img)?.efPercent, ef.isFinite {
+                liveEFPercent = ef
+            }
+        }
+    }
+
+    private func stopLiveEFUpdates() {
+        efTimer?.invalidate()
+        efTimer = nil
     }
 
     private func saveScanToHistory() {

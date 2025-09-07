@@ -1,0 +1,5 @@
+.augment_derived/
+.augment_derived80/
+*.xcworkspace/xcuserdata/
+*.app/
+*.framework/
