@@ -340,6 +340,8 @@ struct InfoRow: View {
             Spacer()
             Text(value)
                 .fontWeight(.medium)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
         .font(.subheadline)
     }
@@ -356,7 +358,7 @@ struct EFResultCard: View {
                     .font(.subheadline)
                     .foregroundColor(.secondary)
 
-                Text("\(String(format: "%.1f", value))%")
+                Text(value.isFinite ? String(format: "%.1f%%", value) : "–")
                     .font(.largeTitle)
                     .fontWeight(.bold)
                     .foregroundColor(efColor)
@@ -442,7 +444,7 @@ struct MultiOutputMetricsSection: View {
         HStack {
             Text(label).foregroundColor(.secondary)
             Spacer()
-            Text(value.map { String(format: "%.1f %@", $0, unit) } ?? "–")
+            Text(value?.isFinite == true ? String(format: "%.1f %@", value!, unit) : "–")
                 .fontWeight(.medium)
         }
         .font(.subheadline)

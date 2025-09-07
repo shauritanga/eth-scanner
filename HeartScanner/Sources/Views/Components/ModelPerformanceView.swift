@@ -161,14 +161,35 @@ struct ModelPerformanceView: View {
 
             if let image = model.image, let mo = MultiOutputModel.shared.predict(image: image) {
                 VStack(spacing: 8) {
-                    metricRow("EF", mo.efPercent.map { String(format: "%.1f%%", $0) } ?? "–")
-                    metricRow("EDV", mo.edvMl.map { String(format: "%.0f mL", $0) } ?? "–")
-                    metricRow("ESV", mo.esvMl.map { String(format: "%.0f mL", $0) } ?? "–")
-                    metricRow("LVIDd", mo.lviddCm.map { String(format: "%.1f cm", $0) } ?? "–")
-                    metricRow("LVIDs", mo.lvidsCm.map { String(format: "%.1f cm", $0) } ?? "–")
-                    metricRow("IVSd", mo.ivsdCm.map { String(format: "%.1f cm", $0) } ?? "–")
-                    metricRow("LVPWd", mo.lvpwdCm.map { String(format: "%.1f cm", $0) } ?? "–")
-                    metricRow("TAPSE", mo.tapseMm.map { String(format: "%.0f mm", $0) } ?? "–")
+                    metricRow(
+                        "EF",
+                        (mo.efPercent?.isFinite == true)
+                            ? String(format: "%.1f%%", mo.efPercent!) : "–")
+                    metricRow(
+                        "EDV",
+                        (mo.edvMl?.isFinite == true) ? String(format: "%.0f mL", mo.edvMl!) : "–")
+                    metricRow(
+                        "ESV",
+                        (mo.esvMl?.isFinite == true) ? String(format: "%.0f mL", mo.esvMl!) : "–")
+                    metricRow(
+                        "LVIDd",
+                        (mo.lviddCm?.isFinite == true)
+                            ? String(format: "%.1f cm", mo.lviddCm!) : "–")
+                    metricRow(
+                        "LVIDs",
+                        (mo.lvidsCm?.isFinite == true)
+                            ? String(format: "%.1f cm", mo.lvidsCm!) : "–")
+                    metricRow(
+                        "IVSd",
+                        (mo.ivsdCm?.isFinite == true) ? String(format: "%.1f cm", mo.ivsdCm!) : "–")
+                    metricRow(
+                        "LVPWd",
+                        (mo.lvpwdCm?.isFinite == true)
+                            ? String(format: "%.1f cm", mo.lvpwdCm!) : "–")
+                    metricRow(
+                        "TAPSE",
+                        (mo.tapseMm?.isFinite == true)
+                            ? String(format: "%.0f mm", mo.tapseMm!) : "–")
                 }
                 .padding()
                 .background(Color(.systemBackground))

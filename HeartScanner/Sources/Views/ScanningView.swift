@@ -110,14 +110,7 @@ struct ScanningView: View {
                 print("🔧 SCANNING: Model entered imaging mode, but UI not scanning - syncing...")
                 isScanning = true
                 scanDuration = 0
-                // Start/stop live EF polling with stage
-                if newStage == .imaging {
-                    startLiveEFUpdates()
-                } else {
-                    stopLiveEFUpdates()
-                    liveEFPercent = nil
-                }
-
+                // Start duration timer when model reaches imaging
                 scanTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
                     scanDuration += 0.1
                 }
@@ -379,9 +372,9 @@ struct ScanningView: View {
 
             Spacer()
 
-            // Patient info (if available)
-            if let patient = patientSession.currentPatient {
-                VStack(alignment: .trailing, spacing: 2) {
+            // Right-side overlay: patient (if any) and live EF
+            VStack(alignment: .trailing, spacing: 4) {
+                if let patient = patientSession.currentPatient {
                     Text("Patient")
                         .font(.caption2)
                         .foregroundColor(.white.opacity(0.7))
@@ -389,19 +382,21 @@ struct ScanningView: View {
                         .font(.caption)
                         .fontWeight(.medium)
                         .foregroundColor(.white.opacity(0.9))
-                    // Live EF readout (right-aligned)
-                    if isScanning, let ef = liveEFPercent {
-                        VStack(alignment: .trailing, spacing: 2) {
-                            Text("EF")
-                                .font(.caption2)
-                                .foregroundColor(.white.opacity(0.7))
-                            Text("\(String(format: "%.1f", ef))%")
-                                .font(.headline)
-                                .fontWeight(.semibold)
-                                .foregroundColor(.white)
-                        }
+                }
+                if isScanning {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("EF")
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.7))
+                        Text(
+                            liveEFPercent?.isFinite == true
+                                ? String(format: "%.1f%%", liveEFPercent!) : "–"
+                        )
+                        .font(.headline)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .accessibilityLabel("Ejection Fraction")
                     }
-
                 }
             }
 
@@ -438,18 +433,6 @@ struct ScanningView: View {
                         .padding(8)
                         .background(.black.opacity(0.7))
                         .cornerRadius(8)
-                }
-
-                // Exit scanning button
-                if isScanning {
-                    Button(action: { showingExitConfirmation = true }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.white)
-                            .font(.title2)
-                            .padding(8)
-                            .background(.red.opacity(0.8))
-                            .cornerRadius(8)
-                    }
                 }
             }
         }
@@ -677,8 +660,8 @@ struct ScanningView: View {
             scanDuration += 0.1
         }
 
-        stopLiveEFUpdates()
-        liveEFPercent = nil
+        // Start live EF polling now that scanning has started
+        startLiveEFUpdates()
 
         // Ensure the correct preset is set if needed
         if let preset = controlPreset {
@@ -698,6 +681,10 @@ struct ScanningView: View {
 
         // Stop imaging
         model.stopImaging()
+
+        // Stop EF polling and clear overlay
+        stopLiveEFUpdates()
+        liveEFPercent = nil
 
         // Haptic feedback
         let impactFeedback = UIImpactFeedbackGenerator(style: .light)
@@ -725,7 +712,7 @@ struct ScanningView: View {
             withTimeInterval: AppConstants.aiProcessingInterval, repeats: true
         ) { _ in
             guard isScanning, let img = model.image else { return }
-            if let ef = MultiOutputModel.shared.predict(image: img)?.efPercent, ef.isFinite {
+            if let ef = MultiOutputModel.shared.predict(image: img)?.efPercent {
                 liveEFPercent = ef
             }
         }

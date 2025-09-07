@@ -110,14 +110,24 @@ final class MultiOutputModel {
             let featureNames = prediction.featureNames.sorted()
             print("Multi-Output prediction features: \(featureNames)")
 
+            // Debug: show first few raw values
+            for key in featureNames.prefix(3) {
+                if let val = prediction.featureValue(for: key) {
+                    print("  \(key): \(val.debugDescription)")
+                }
+            }
+
             func scalar(_ key: String) -> Double? {
                 guard let v = prediction.featureValue(for: key) else { return nil }
+                let raw: Double?
                 switch v.type {
-                case .double: return v.doubleValue
-                case .int64: return Double(v.int64Value)
-                case .multiArray: return v.multiArrayValue?[0].doubleValue
-                default: return nil
+                case .double: raw = v.doubleValue
+                case .int64: raw = Double(v.int64Value)
+                case .multiArray: raw = v.multiArrayValue?[0].doubleValue
+                default: raw = nil
                 }
+                guard let val = raw, val.isFinite else { return nil }
+                return val
             }
 
             // Try a list of possible keys (models may rename outputs)
