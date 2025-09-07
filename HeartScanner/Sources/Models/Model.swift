@@ -24,29 +24,40 @@ class Model: ObservableObject {
     @Published var probeError: String?
     @Published var alertError: Error? { didSet { showingAlert = (alertError != nil) } }
     @Published var showingAlert: Bool = false
-    @Published var efResult: Float?
     @Published var segmentationMask: UIImage?
     @Published var isUsingRealModels: Bool = false
     @Published var modelStatus: String = "Checking models..."
     @Published var errorMessage: String?
 
-    private let efModel: EFModel
     private let segmentationModel: HeartSegmentationModel
     private var frameBuffer: [CVPixelBuffer] = []
     private let imaging = ButterflyImaging.shared
     private var frameProcessingQueue = DispatchQueue(label: "frame.processing", qos: .userInitiated)
     private var lastProcessedTime: Date = Date()
     private var lastAIProcessedTime: Date = Date()
+    private var aiProcessingInFlight = false  // Prevent overlapping AI work
     // Separate timing for frame display vs AI processing
+
+    // Background AI worker (non-actor) to avoid blocking main thread
+    private let aiWorker: AIWorker
+
+    // Lightweight worker to serialize AI tasks off the main actor
+    private final class AIWorker {
+        private let queue = DispatchQueue(label: "ai.worker.queue", qos: .userInitiated)
+        func run(_ block: @escaping () async -> Void) {
+            queue.async {
+                Task { await block() }
+            }
+        }
+    }
 
     // MARK: - Async Factory Method
 
     static var shared: Model!
 
     static func initialize() async throws {
-        let efModel = try await EFModel()
         let segmentationModel = try await HeartSegmentationModel()
-        shared = Model(efModel: efModel, segmentationModel: segmentationModel)
+        shared = Model(segmentationModel: segmentationModel)
         await shared.checkModelAvailability()
     }
 
@@ -58,14 +69,13 @@ class Model: ObservableObject {
     }
 
     private static func initializeShared() async throws {
-        let efModel = try await EFModel()
         let segmentationModel = try await HeartSegmentationModel()
-        shared = Model(efModel: efModel, segmentationModel: segmentationModel)
+        shared = Model(segmentationModel: segmentationModel)
     }
 
-    private init(efModel: EFModel, segmentationModel: HeartSegmentationModel) {
-        self.efModel = efModel
+    private init(segmentationModel: HeartSegmentationModel) {
         self.segmentationModel = segmentationModel
+        self.aiWorker = AIWorker()
 
         imaging.isClientLoggingEnabled = true
         imaging.licenseStates = { [weak self] in
@@ -84,21 +94,28 @@ class Model: ObservableObject {
         imaging.states = { [weak self] state, changes in
             self?.setState(state, imagingStateChanges: changes)
         }
+        // Refresh status when MultiOutput model becomes available
+        NotificationCenter.default.addObserver(
+            forName: .multiOutputModelReady, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { await self?.checkModelAvailability() }
+        }
+
     }
 
     private func checkModelAvailability() async {
-        let efAvailable = efModel.isModelAvailable
         let segAvailable = segmentationModel.isModelAvailable
+        let multiOutAvailable = MultiOutputModel.shared.isModelAvailable
 
         await MainActor.run {
-            self.isUsingRealModels = efAvailable && segAvailable
+            self.isUsingRealModels = segAvailable && multiOutAvailable
 
-            if efAvailable && segAvailable {
+            if segAvailable && multiOutAvailable {
                 self.modelStatus = "✅ Clinical AI Models Ready"
-                print("CLINICAL READY: Both EF and Segmentation models loaded successfully")
-            } else if efAvailable || segAvailable {
+                print("CLINICAL READY: Segmentation and Multi-Output models loaded successfully")
+            } else if segAvailable || multiOutAvailable {
                 self.modelStatus =
-                    "🚨 CRITICAL: Incomplete Clinical Setup (EF: \(efAvailable ? "✅" : "❌"), Seg: \(segAvailable ? "✅" : "❌"))"
+                    "🚨 CRITICAL: Incomplete Clinical Setup (MultiOut: \(multiOutAvailable ? "✅" : "❌"), Seg: \(segAvailable ? "✅" : "❌"))"
                 print("CLINICAL WARNING: Not all required models are available")
             } else {
                 self.modelStatus = "🚨 CRITICAL: No Clinical Models Available"
@@ -341,7 +358,6 @@ class Model: ObservableObject {
         }
 
         // Clear any previous results
-        efResult = nil
         segmentationMask = nil
         frameBuffer.removeAll()
 
@@ -517,14 +533,20 @@ class Model: ObservableObject {
             if shouldProcessAI {
                 lastAIProcessedTime = now
 
-                // Process segmentation every 2nd frame for good visualization
-                if frameBuffer.count % 2 == 0 {
-                    await processSegmentation(buffer)
-                }
+                // Prevent overlapping AI work to avoid freezes
+                guard !aiProcessingInFlight else { return }
+                aiProcessingInFlight = true
 
-                // Process EF when we have sufficient frames
-                if frameBuffer.count == AppConstants.maxFrameBufferSize {
-                    await processEjectionFraction()
+                aiWorker.run { [weak self] in
+                    guard let self = self else { return }
+                    defer { self.aiProcessingInFlight = false }
+
+                    // Process segmentation every 2nd frame for good visualization
+                    if self.frameBuffer.count % 2 == 0 {
+                        await self.processSegmentation(buffer)
+                    }
+
+                    // EF processing removed; MultiOutputModel is used downstream for stills
                 }
             }
         } catch {
@@ -586,87 +608,4 @@ class Model: ObservableObject {
         return true
     }
 
-    private func processEjectionFraction() async {
-        // Medical-grade validation: Ensure sufficient frames for reliable analysis
-        guard !frameBuffer.isEmpty else {
-            print("EF Processing: No frames available in buffer")
-            return
-        }
-
-        guard frameBuffer.count >= 8 else {
-            print(
-                "EF Processing: Insufficient frames (\(frameBuffer.count)) for reliable cardiac analysis"
-            )
-            return
-        }
-
-        print("EF Processing: Starting medical analysis with \(frameBuffer.count) frames")
-
-        do {
-            if let efInput = await efModel.preprocess(frameBuffer) {
-                if let ef = try efModel.predict(efInput) {
-                    // Medical-grade validation: EF must be within physiologically possible range
-                    let efPercentage = ef * 100
-                    print(
-                        "EF Processing: Raw EF value: \(ef), Percentage: \(String(format: "%.1f", efPercentage))%"
-                    )
-
-                    // CLINICAL VALIDATION: EF must be within physiologically possible range (15-80%)
-                    if efPercentage >= 15.0 && efPercentage <= 80.0 {
-                        await MainActor.run {
-                            self.efResult = ef
-
-                            // CLINICAL LOGGING: Always using real AI models
-                            print(
-                                "CLINICAL EF RESULT: \(String(format: "%.1f", efPercentage))% (Source: Clinical AI Model)"
-                            )
-
-                            // Clinical range validation using app constants
-                            if ef < AppConstants.efLowerThreshold
-                                || ef > AppConstants.efUpperThreshold
-                            {
-                                self.alertError = NSError(
-                                    domain: "HeartScanner", code: -1,
-                                    userInfo: [
-                                        NSLocalizedDescriptionKey:
-                                            "EF outside normal range: \(String(format: "%.1f", efPercentage))%. Please consult a cardiologist."
-                                    ])
-                                self.showingAlert = true
-                                print("EF Processing: Clinical alert - EF outside normal range")
-                            }
-                        }
-                    } else {
-                        print(
-                            "CLINICAL WARNING: EF result (\(String(format: "%.1f", efPercentage))%) outside normal range (15-80%) - requires clinical review"
-                        )
-                        // Don't update the result if it's medically implausible
-                        await MainActor.run {
-                            self.alertError = NSError(
-                                domain: "HeartScanner", code: -2,
-                                userInfo: [
-                                    NSLocalizedDescriptionKey:
-                                        "Clinical Alert: EF measurement outside normal range (\(String(format: "%.1f", efPercentage))%). Please verify probe placement and cardiac view quality. Consider manual verification."
-                                ])
-                            self.showingAlert = true
-                        }
-                    }
-                } else {
-                    print("EF Processing: Model prediction failed - no result returned")
-                }
-            } else {
-                print("EF Processing: Frame preprocessing failed")
-            }
-        } catch {
-            print("EF Processing: Critical error - \(error.localizedDescription)")
-            await MainActor.run {
-                self.alertError = NSError(
-                    domain: "HeartScanner", code: -3,
-                    userInfo: [
-                        NSLocalizedDescriptionKey:
-                            "Analysis failed. Please check probe connection and try again."
-                    ])
-                self.showingAlert = true
-            }
-        }
-    }
 }

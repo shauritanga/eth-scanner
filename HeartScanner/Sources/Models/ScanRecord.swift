@@ -35,12 +35,52 @@ struct ScanRecord: Codable, Identifiable, Equatable {
     }
 
     struct AnalysisResults: Codable, Equatable {
-        let ejectionFraction: Double?
+        // Primary EF and confidence
+        let ejectionFraction: Double?  // %
         let efConfidence: Double?
+        // Multi-output metrics (optional)
+        let edvMl: Double?
+        let esvMl: Double?
+        let lviddCm: Double?
+        let lvidsCm: Double?
+        let ivsdCm: Double?
+        let lvpwdCm: Double?
+        let tapseMm: Double?
+
         let segmentationResults: SegmentationData?
         let measurements: [Measurement]
         let aiModelVersion: String
         let processingTime: TimeInterval
+
+        init(
+            ejectionFraction: Double?,
+            efConfidence: Double?,
+            edvMl: Double? = nil,
+            esvMl: Double? = nil,
+            lviddCm: Double? = nil,
+            lvidsCm: Double? = nil,
+            ivsdCm: Double? = nil,
+            lvpwdCm: Double? = nil,
+            tapseMm: Double? = nil,
+            segmentationResults: SegmentationData?,
+            measurements: [Measurement],
+            aiModelVersion: String,
+            processingTime: TimeInterval
+        ) {
+            self.ejectionFraction = ejectionFraction
+            self.efConfidence = efConfidence
+            self.edvMl = edvMl
+            self.esvMl = esvMl
+            self.lviddCm = lviddCm
+            self.lvidsCm = lvidsCm
+            self.ivsdCm = ivsdCm
+            self.lvpwdCm = lvpwdCm
+            self.tapseMm = tapseMm
+            self.segmentationResults = segmentationResults
+            self.measurements = measurements
+            self.aiModelVersion = aiModelVersion
+            self.processingTime = processingTime
+        }
 
         struct SegmentationData: Codable, Equatable {
             let leftVentricleArea: Double?
@@ -119,6 +159,22 @@ struct ScanRecord: Codable, Identifiable, Equatable {
             }
         }
 
+        /// Generate real quality metrics from image analysis
+        static func analyze(
+            image: UIImage,
+            modelConfidence: Double? = nil,
+            segmentationMask: UIImage? = nil,
+            processingTime: TimeInterval? = nil
+        ) -> QualityMetrics {
+            return QualityAnalyzer.shared.analyzeQuality(
+                image: image,
+                modelConfidence: modelConfidence,
+                segmentationMask: segmentationMask,
+                processingTime: processingTime
+            )
+        }
+
+        /// Fallback sample data for previews and testing
         static var sample: QualityMetrics {
             return QualityMetrics(
                 imageClarity: 0.85,
@@ -164,8 +220,12 @@ struct ScanRecord: Codable, Identifiable, Equatable {
     }
 
     init(
-        patient: Patient?, analysisResults: AnalysisResults, imageData: ImageData,
-        clinicalNotes: String = "", scanDuration: TimeInterval = 0
+        patient: Patient?,
+        analysisResults: AnalysisResults,
+        imageData: ImageData,
+        clinicalNotes: String = "",
+        scanDuration: TimeInterval = 0,
+        qualityMetrics: QualityMetrics? = nil
     ) {
         self.id = UUID().uuidString
         self.patient = patient
@@ -175,7 +235,7 @@ struct ScanRecord: Codable, Identifiable, Equatable {
         self.analysisResults = analysisResults
         self.imageData = imageData
         self.clinicalNotes = clinicalNotes
-        self.qualityMetrics = QualityMetrics.sample
+        self.qualityMetrics = qualityMetrics ?? QualityMetrics.sample
         self.exportHistory = []
     }
 }
@@ -213,10 +273,43 @@ extension ScanRecord {
         return qualityMetrics.overallQuality.rawValue
     }
 
-    /// File size summary
+    /// File size summary - calculates actual file sizes
     var fileSizeDescription: String {
-        // This would calculate actual file sizes in a real implementation
-        return "~2.5 MB"
+        var totalSize: Int64 = 0
+
+        // Calculate thumbnail size
+        let thumbnailURL = MediaManager.shared.getMediaURL(for: imageData.thumbnailPath)
+        totalSize += getFileSize(url: thumbnailURL)
+
+        // Calculate full image size
+        let fullImageURL = MediaManager.shared.getMediaURL(for: imageData.fullImagePath)
+        totalSize += getFileSize(url: fullImageURL)
+
+        // Calculate video size if available
+        if let videoPath = imageData.videoPath {
+            let videoURL = MediaManager.shared.getMediaURL(for: videoPath)
+            totalSize += getFileSize(url: videoURL)
+        }
+
+        return formatFileSize(bytes: totalSize)
+    }
+
+    /// Get file size for a given URL
+    private func getFileSize(url: URL) -> Int64 {
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            return attributes[.size] as? Int64 ?? 0
+        } catch {
+            return 0
+        }
+    }
+
+    /// Format file size in human-readable format
+    private func formatFileSize(bytes: Int64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useMB, .useKB]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: bytes)
     }
 }
 
@@ -231,6 +324,13 @@ extension ScanRecord {
                 analysisResults: AnalysisResults(
                     ejectionFraction: 65.2,
                     efConfidence: 0.94,
+                    edvMl: 120,
+                    esvMl: 42,
+                    lviddCm: 5.0,
+                    lvidsCm: 3.1,
+                    ivsdCm: 0.9,
+                    lvpwdCm: 0.9,
+                    tapseMm: 22,
                     segmentationResults: AnalysisResults.SegmentationData(
                         leftVentricleArea: 12.5,
                         rightVentricleArea: 8.3,
@@ -258,6 +358,13 @@ extension ScanRecord {
                 analysisResults: AnalysisResults(
                     ejectionFraction: 58.7,
                     efConfidence: 0.87,
+                    edvMl: 110,
+                    esvMl: 46,
+                    lviddCm: 4.8,
+                    lvidsCm: 3.2,
+                    ivsdCm: 0.8,
+                    lvpwdCm: 0.9,
+                    tapseMm: 19,
                     segmentationResults: nil,
                     measurements: [
                         AnalysisResults.Measurement(type: .ejectionFraction, value: 58.7, unit: "%")

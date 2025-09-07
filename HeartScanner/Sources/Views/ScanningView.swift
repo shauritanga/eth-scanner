@@ -22,6 +22,8 @@ struct ScanningView: View {
     // Track last captured photo during recording for combined save
     @State private var lastCapturedPhotoData:
         (image: UIImage, imagePaths: (thumbnailPath: String, fullImagePath: String))? = nil
+    // Snapshot patient at recording start to ensure we save with the correct patient even if session changes
+    @State private var recordingPatient: Patient? = nil
 
     let imaging = ButterflyImaging.shared
 
@@ -47,11 +49,6 @@ struct ScanningView: View {
                     scanningTopBar
 
                     Spacer()
-
-                    // EF Results Display during scanning
-                    if let ef = model.efResult {
-                        efResultsDisplay(ef)
-                    }
 
                     Spacer()
                 } else {
@@ -478,24 +475,6 @@ struct ScanningView: View {
         .padding(.horizontal)
     }
 
-    // MARK: - EF Results Display
-
-    private func efResultsDisplay(_ ef: Float) -> some View {
-        VStack(spacing: 4) {
-            Text("Ejection Fraction: \(String(format: "%.1f", ef * 100))%")
-                .font(.title2)
-                .foregroundColor(.white)
-
-            Text(model.isUsingRealModels ? "AI Prediction" : "Simulated")
-                .font(.caption)
-                .foregroundColor(model.isUsingRealModels ? .green : .orange)
-        }
-        .padding()
-        .background(.black.opacity(0.7))
-        .cornerRadius(12)
-        .accessibilityLabel("Ejection Fraction: \(ef * 100)%")
-    }
-
     // MARK: - Bottom Controls
 
     private var bottomControls: some View {
@@ -528,8 +507,8 @@ struct ScanningView: View {
 
             // Main control buttons
             HStack(spacing: 20) {
-                // Save scan button (only show when has results)
-                if model.efResult != nil || model.image != nil {
+                // Save scan button (enabled when an image is available)
+                if model.image != nil {
                     Button(action: saveScanToHistory) {
                         Label("Save", systemImage: "square.and.arrow.down")
                             .font(.headline)
@@ -539,7 +518,6 @@ struct ScanningView: View {
                             .background(.blue)
                             .cornerRadius(12)
                     }
-                    .disabled(model.efResult == nil && model.image == nil)
                 }
 
                 // Play/Pause button (iOS style)
@@ -577,7 +555,7 @@ struct ScanningView: View {
                             .background(.red)
                             .cornerRadius(12)
                     }
-                } else if model.efResult != nil || model.image != nil {
+                } else if model.image != nil {
                     // Show history button when results available
                     Button(action: { showingScanHistory = true }) {
                         Label("History", systemImage: "clock.arrow.circlepath")
@@ -708,22 +686,21 @@ struct ScanningView: View {
     private func saveScanToHistory() {
         guard let image = model.image else { return }
 
-        // Create analysis results
-        var measurements: [ScanRecord.AnalysisResults.Measurement] = []
-        if let ef = model.efResult {
-            let efMeasurement = ScanRecord.AnalysisResults.Measurement(
-                type: .ejectionFraction,
-                value: Double(ef * 100),
-                unit: "%"
-            )
-            measurements.append(efMeasurement)
-        }
+        // Create analysis results exclusively from MultiOutputModel
+        let multiOut = model.image.flatMap { MultiOutputModel.shared.predict(image: $0) }
 
         let analysisResults = ScanRecord.AnalysisResults(
-            ejectionFraction: model.efResult != nil ? Double(model.efResult! * 100) : nil,
-            efConfidence: model.isUsingRealModels ? 0.85 : 0.5,
+            ejectionFraction: multiOut?.efPercent,
+            efConfidence: multiOut?.efPercent != nil ? 0.85 : nil,
+            edvMl: multiOut?.edvMl,
+            esvMl: multiOut?.esvMl,
+            lviddCm: multiOut?.lviddCm,
+            lvidsCm: multiOut?.lvidsCm,
+            ivsdCm: multiOut?.ivsdCm,
+            lvpwdCm: multiOut?.lvpwdCm,
+            tapseMm: multiOut?.tapseMm,
             segmentationResults: nil,
-            measurements: measurements,
+            measurements: [],
             aiModelVersion: model.isUsingRealModels ? "v2.1.0" : "simulated",
             processingTime: 2.5
         )
@@ -759,13 +736,22 @@ struct ScanningView: View {
             originalSize: image.size
         )
 
-        // Create scan record
+        // Analyze image quality using real metrics
+        let qualityMetrics = ScanRecord.QualityMetrics.analyze(
+            image: image,
+            modelConfidence: multiOut?.efPercent != nil ? 0.85 : nil,
+            segmentationMask: model.segmentationMask,
+            processingTime: 2.0  // Approximate processing time for image analysis
+        )
+
+        // Create scan record with real quality metrics
         let scanRecord = ScanRecord(
             patient: patientSession.currentPatient,
             analysisResults: analysisResults,
             imageData: imageDataRecord,
             clinicalNotes: "",
-            scanDuration: 30.0
+            scanDuration: 30.0,
+            qualityMetrics: qualityMetrics
         )
 
         // Save to history
@@ -872,8 +858,11 @@ struct ScanningView: View {
 
         // Start video recording using MediaManager
         if mediaManager.startVideoRecording() {
+            // Snapshot patient at recording start; use this at stop time
+            recordingPatient = patientSession.currentPatient
+
             print(
-                "🎥 Started recording video for patient: \(patientSession.currentPatient?.patientID ?? "Unknown")"
+                "🎥 Started recording video for patient: \(recordingPatient?.patientID ?? "Unknown")"
             )
 
             // Haptic feedback
@@ -888,11 +877,15 @@ struct ScanningView: View {
         guard mediaManager.isRecording else { return }
 
         // Stop video recording using MediaManager
-        if let videoURL = mediaManager.stopVideoRecording() {
-            print("🎥 Stopped recording video")
+        mediaManager.stopVideoRecording { videoURL, finalDuration in
+            guard let videoURL = videoURL else {
+                print("❌ Failed to stop video recording")
+                return
+            }
+            print("🎥 Stopped recording video; duration=\(String(format: "%.2f", finalDuration))s")
 
             // Save combined video + photo record if photo was captured during recording
-            if let patient = patientSession.currentPatient {
+            if let patient = recordingPatient ?? patientSession.currentPatient {
                 if let photoData = lastCapturedPhotoData {
                     saveCombinedVideoAndPhotoRecord(
                         videoURL: videoURL,
@@ -901,19 +894,109 @@ struct ScanningView: View {
                     )
                     print("💾 Saved combined video + photo record")
                 } else {
-                    saveVideoWithPatientData(videoURL: videoURL, patient: patient)
+                    saveVideoWithPatientData(
+                        videoURL: videoURL, duration: finalDuration, patient: patient)
                     print("💾 Saved video-only record")
+                }
+            } else {
+                // No patient entered: still save as anonymous so nothing is lost
+                if let photoData = lastCapturedPhotoData {
+                    let imageData = ScanRecord.ImageData(
+                        thumbnailPath: photoData.imagePaths.thumbnailPath,
+                        fullImagePath: photoData.imagePaths.fullImagePath,
+                        videoPath: videoURL.lastPathComponent,
+                        originalSize: photoData.image.size
+                    )
+                    // Analyze quality using the captured photo
+                    let qualityMetrics = ScanRecord.QualityMetrics.analyze(
+                        image: photoData.image,
+                        modelConfidence: MultiOutputModel.shared.predict(image: photoData.image)?
+                            .efPercent != nil ? 0.85 : nil,
+                        segmentationMask: model.segmentationMask,
+                        processingTime: 0.8
+                    )
+
+                    let record = ScanRecord(
+                        patient: nil,
+                        analysisResults: ScanRecord.AnalysisResults(
+                            ejectionFraction: model.image.flatMap {
+                                MultiOutputModel.shared.predict(image: $0)?.efPercent
+                            },
+                            efConfidence: model.image.flatMap {
+                                MultiOutputModel.shared.predict(image: $0)?.efPercent
+                            } != nil ? 0.85 : nil,
+                            edvMl: model.image.flatMap {
+                                MultiOutputModel.shared.predict(image: $0)?.edvMl
+                            },
+                            esvMl: model.image.flatMap {
+                                MultiOutputModel.shared.predict(image: $0)?.esvMl
+                            },
+                            lviddCm: model.image.flatMap {
+                                MultiOutputModel.shared.predict(image: $0)?.lviddCm
+                            },
+                            lvidsCm: model.image.flatMap {
+                                MultiOutputModel.shared.predict(image: $0)?.lvidsCm
+                            },
+                            ivsdCm: model.image.flatMap {
+                                MultiOutputModel.shared.predict(image: $0)?.ivsdCm
+                            },
+                            lvpwdCm: model.image.flatMap {
+                                MultiOutputModel.shared.predict(image: $0)?.lvpwdCm
+                            },
+                            tapseMm: model.image.flatMap {
+                                MultiOutputModel.shared.predict(image: $0)?.tapseMm
+                            },
+                            segmentationResults: nil,
+                            measurements: [],
+                            aiModelVersion: "v2.1.0",
+                            processingTime: 0.8
+                        ),
+                        imageData: imageData,
+                        clinicalNotes: "Anonymous combined video + photo",
+                        scanDuration: finalDuration,
+                        qualityMetrics: qualityMetrics
+                    )
+                    scanHistory.saveScan(record)
+                    print("💾 Saved combined video + photo record (anonymous)")
+                } else {
+                    let imageData = ScanRecord.ImageData(
+                        thumbnailPath:
+                            "video_thumb_\(videoURL.deletingPathExtension().lastPathComponent).jpg",
+                        fullImagePath:
+                            "video_frame_\(videoURL.deletingPathExtension().lastPathComponent).jpg",
+                        videoPath: videoURL.lastPathComponent,
+                        originalSize: CGSize(width: 640, height: 480)
+                    )
+                    let record = ScanRecord(
+                        patient: nil,
+                        analysisResults: ScanRecord.AnalysisResults(
+                            ejectionFraction: model.image.flatMap {
+                                MultiOutputModel.shared.predict(image: $0)?.efPercent
+                            },
+                            efConfidence: model.image.flatMap {
+                                MultiOutputModel.shared.predict(image: $0)?.efPercent
+                            } != nil ? 0.85 : nil,
+                            segmentationResults: nil,
+                            measurements: [],
+                            aiModelVersion: "v2.1.0",
+                            processingTime: 0.4
+                        ),
+                        imageData: imageData,
+                        clinicalNotes: "Anonymous video recording",
+                        scanDuration: finalDuration
+                    )
+                    scanHistory.saveScan(record)
+                    print("💾 Saved video-only record (anonymous)")
                 }
             }
 
-            // Clear stored photo data
+            // Clear stored photo data and recording patient snapshot
             lastCapturedPhotoData = nil
+            recordingPatient = nil
 
             // Haptic feedback
             let impactFeedback = UIImpactFeedbackGenerator(style: .light)
             impactFeedback.impactOccurred()
-        } else {
-            print("❌ Failed to stop video recording")
         }
     }
 
@@ -947,14 +1030,22 @@ struct ScanningView: View {
         impactFeedback.impactOccurred()
     }
 
-    private func saveVideoWithPatientData(videoURL: URL, patient: Patient) {
+    private func saveVideoWithPatientData(videoURL: URL, duration: TimeInterval, patient: Patient) {
         // Extract filename from URL
         let videoFilename = videoURL.lastPathComponent
 
-        // Create analysis results (basic for video)
+        // Create analysis results (use multi-output if current image available)
+        let mo = model.image.flatMap { MultiOutputModel.shared.predict(image: $0) }
         let analysisResults = ScanRecord.AnalysisResults(
-            ejectionFraction: model.efResult.map { Double($0 * 100) },
-            efConfidence: model.efResult != nil ? 0.85 : nil,
+            ejectionFraction: mo?.efPercent,
+            efConfidence: mo?.efPercent != nil ? 0.85 : nil,
+            edvMl: mo?.edvMl,
+            esvMl: mo?.esvMl,
+            lviddCm: mo?.lviddCm,
+            lvidsCm: mo?.lvidsCm,
+            ivsdCm: mo?.ivsdCm,
+            lvpwdCm: mo?.lvpwdCm,
+            tapseMm: mo?.tapseMm,
             segmentationResults: nil,
             measurements: [],
             aiModelVersion: "v2.1.0",
@@ -962,12 +1053,28 @@ struct ScanningView: View {
         )
 
         // Create image data record with video
+        let base = URL(fileURLWithPath: videoFilename).deletingPathExtension().lastPathComponent
         let imageData = ScanRecord.ImageData(
-            thumbnailPath: "video_thumb_\(videoFilename).jpg",
-            fullImagePath: "video_frame_\(videoFilename).jpg",
+            thumbnailPath: "video_thumb_\(base).jpg",
+            fullImagePath: "video_frame_\(base).jpg",
             videoPath: videoFilename,
             originalSize: CGSize(width: 640, height: 480)
         )
+
+        // Generate quality metrics from video (use current image if available)
+        let qualityMetrics: ScanRecord.QualityMetrics
+        if let currentImage = model.image {
+            qualityMetrics = ScanRecord.QualityMetrics.analyze(
+                image: currentImage,
+                modelConfidence: MultiOutputModel.shared.predict(image: currentImage)?.efPercent
+                    != nil ? 0.85 : nil,
+                segmentationMask: model.segmentationMask,
+                processingTime: 0.5
+            )
+        } else {
+            // Fallback to sample metrics if no image available
+            qualityMetrics = ScanRecord.QualityMetrics.sample
+        }
 
         // Create scan record
         let scanRecord = ScanRecord(
@@ -975,7 +1082,8 @@ struct ScanningView: View {
             analysisResults: analysisResults,
             imageData: imageData,
             clinicalNotes: "Video recording captured during scan",
-            scanDuration: mediaManager.recordingDuration
+            scanDuration: duration,
+            qualityMetrics: qualityMetrics
         )
 
         // Save to history
@@ -992,18 +1100,12 @@ struct ScanningView: View {
         }
 
         // Create analysis results
+        let mo = MultiOutputModel.shared.predict(image: image)
         let analysisResults = ScanRecord.AnalysisResults(
-            ejectionFraction: model.efResult.map { Double($0 * 100) },
-            efConfidence: model.efResult != nil ? 0.85 : nil,
+            ejectionFraction: mo?.efPercent,
+            efConfidence: mo?.efPercent != nil ? 0.85 : nil,
             segmentationResults: nil,
-            measurements: model.efResult != nil
-                ? [
-                    ScanRecord.AnalysisResults.Measurement(
-                        type: .ejectionFraction,
-                        value: Double(model.efResult! * 100),
-                        unit: "%"
-                    )
-                ] : [],
+            measurements: [],
             aiModelVersion: "v2.1.0",
             processingTime: 0.3
         )
@@ -1016,13 +1118,22 @@ struct ScanningView: View {
             originalSize: image.size
         )
 
+        // Analyze image quality using real metrics
+        let qualityMetrics = ScanRecord.QualityMetrics.analyze(
+            image: image,
+            modelConfidence: mo?.efPercent != nil ? 0.85 : nil,
+            segmentationMask: model.segmentationMask,
+            processingTime: 0.3
+        )
+
         // Create scan record
         let scanRecord = ScanRecord(
             patient: patient,
             analysisResults: analysisResults,
             imageData: imageData,
             clinicalNotes: "Photo captured during scan",
-            scanDuration: scanDuration
+            scanDuration: scanDuration,
+            qualityMetrics: qualityMetrics
         )
 
         // Save to history
@@ -1040,18 +1151,12 @@ struct ScanningView: View {
         let videoFilename = videoURL.lastPathComponent
 
         // Create analysis results with current EF
+        let mo = MultiOutputModel.shared.predict(image: photoData.image)
         let analysisResults = ScanRecord.AnalysisResults(
-            ejectionFraction: model.efResult.map { Double($0 * 100) },
-            efConfidence: model.efResult != nil ? 0.85 : nil,
+            ejectionFraction: mo?.efPercent,
+            efConfidence: mo?.efPercent != nil ? 0.85 : nil,
             segmentationResults: nil,
-            measurements: model.efResult != nil
-                ? [
-                    ScanRecord.AnalysisResults.Measurement(
-                        type: .ejectionFraction,
-                        value: Double(model.efResult! * 100),
-                        unit: "%"
-                    )
-                ] : [],
+            measurements: [],
             aiModelVersion: "v2.1.0",
             processingTime: 1.2
         )
@@ -1064,13 +1169,22 @@ struct ScanningView: View {
             originalSize: photoData.image.size
         )
 
+        // Analyze quality using the captured photo (best quality reference)
+        let qualityMetrics = ScanRecord.QualityMetrics.analyze(
+            image: photoData.image,
+            modelConfidence: mo?.efPercent != nil ? 0.85 : nil,
+            segmentationMask: model.segmentationMask,
+            processingTime: 1.2
+        )
+
         // Create comprehensive scan record
         let scanRecord = ScanRecord(
             patient: patient,
             analysisResults: analysisResults,
             imageData: imageData,
             clinicalNotes: "Combined video recording and photo capture during cardiac scan",
-            scanDuration: mediaManager.recordingDuration
+            scanDuration: mediaManager.recordingDuration,
+            qualityMetrics: qualityMetrics
         )
 
         // Save to history

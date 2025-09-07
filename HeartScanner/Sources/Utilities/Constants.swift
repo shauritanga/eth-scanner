@@ -27,4 +27,22 @@ struct AppConstants {
     static let enableNoiseReduction = true
     static let enableContrastEnhancement = true
     static let frameAveragingCount = 3  // Average 3 frames to reduce motion artifacts
+
+    // Hidden calibration multipliers for multi-output metrics (adjust after validation)
+    struct Calibration {
+        static var efPercent: Double = 1.0
+        static var edvMl: Double = 1.0
+        static var esvMl: Double = 1.0
+        static var lviddCm: Double = 1.0
+        static var lvidsCm: Double = 1.0
+        static var ivsdCm: Double = 1.0
+        static var lvpwdCm: Double = 1.0
+        static var tapseMm: Double = 1.0
+    }
+
+    // Clinical thresholds for UI checks
+    struct Clinical {
+        static let efPercentRange: ClosedRange<Double> = 15.0...80.0
+        static let tapseNormalMinMm: Double = 17.0
+    }
 }

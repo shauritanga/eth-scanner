@@ -3,16 +3,17 @@ import CoreML
 import UIKit
 
 extension UIImage {
-    func toCVPixelBuffer() -> CVPixelBuffer? {
+    func toCVPixelBuffer(targetSize: CGSize? = nil) -> CVPixelBuffer? {
         guard let cgImage = self.cgImage else { return nil }
 
-        let width = cgImage.width
-        let height = cgImage.height
+        let width = Int(targetSize?.width ?? CGFloat(cgImage.width))
+        let height = Int(targetSize?.height ?? CGFloat(cgImage.height))
 
         var pixelBuffer: CVPixelBuffer?
         let attributes: [CFString: Any] = [
             kCVPixelBufferCGImageCompatibilityKey: true,
             kCVPixelBufferCGBitmapContextCompatibilityKey: true,
+            kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
         ]
 
         let status = CVPixelBufferCreate(
@@ -29,6 +30,10 @@ extension UIImage {
         CVPixelBufferLockBaseAddress(buffer, [])
         defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
 
+        // Create CGContext that matches 32BGRA pixel layout (little-endian, premultipliedFirst)
+        let bitmapInfo = CGBitmapInfo.byteOrder32Little.union(
+            CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)
+        )
         let context = CGContext(
             data: CVPixelBufferGetBaseAddress(buffer),
             width: width,
@@ -36,7 +41,7 @@ extension UIImage {
             bitsPerComponent: 8,
             bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
             space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            bitmapInfo: bitmapInfo.rawValue
         )
 
         guard let cgContext = context else { return nil }

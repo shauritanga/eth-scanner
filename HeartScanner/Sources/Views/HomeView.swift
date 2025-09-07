@@ -305,7 +305,7 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Actions
+    // MARK: - Actionsa
     private func setupHomeView() {
         availablePresets = model.availablePresets
         if selectedPreset == nil && !availablePresets.isEmpty {

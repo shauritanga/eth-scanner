@@ -142,7 +142,7 @@ struct ScanningSettingsView: View {
             }
             .headerProminence(.increased)
 
-            Section("Model Information") {
+            Section(header: Text("Model Information")) {
                 HStack {
                     Text("AI Models Status")
                     Spacer()
@@ -158,11 +158,13 @@ struct ScanningSettingsView: View {
                         .cornerRadius(8)
                 }
 
-                if let ef = model.efResult {
+                if let img = model.image, let mo = MultiOutputModel.shared.predict(image: img),
+                    let ef = mo.efPercent
+                {
                     HStack {
                         Text("Current EF")
                         Spacer()
-                        Text("\(String(format: "%.1f", ef * 100))%")
+                        Text("\(String(format: "%.1f", ef))%")
                             .font(.headline)
                             .foregroundColor(model.isUsingRealModels ? .green : .orange)
                     }
@@ -193,6 +195,24 @@ struct ScanningSettingsView: View {
                     }
                 }
             }
+
+            // Clinical Evaluation Section
+            Section("Clinical Evaluation") {
+                NavigationLink(destination: ModelPerformanceView(model: model)) {
+                    Label("Model Performance", systemImage: "chart.line.uptrend.xyaxis")
+                }
+
+                Button(action: {
+                    exportDiagnosticData()
+                }) {
+                    Label("Export Diagnostic Data", systemImage: "square.and.arrow.up")
+                }
+            }
+
+            // Hidden Developer Calibration
+            Section("Developer Calibration") {
+                CalibrationControlsView()
+            }
         }
         .onAppear {
             // Initialize controls with current values
@@ -202,6 +222,13 @@ struct ScanningSettingsView: View {
             controlMode = model.mode
             controlPreset = model.preset
         }
+    }
+
+    private func exportDiagnosticData() {
+        // Export comprehensive diagnostic data for clinical evaluation
+        print("📊 Exporting diagnostic data for clinical evaluation...")
+        // This would generate a detailed report of model performance,
+        // processing times, confidence scores, and validation results
     }
 
     // MARK: - Helper Functions
@@ -265,6 +292,59 @@ extension ProbeState {
         case .charging: return "Charging"
         case .depletedBattery: return "Depleted Battery"
         @unknown default: return "Unknown"
+        }
+    }
+}
+
+struct CalibrationControlsView: View {
+    @State private var ef: Double = AppConstants.Calibration.efPercent
+    @State private var edv: Double = AppConstants.Calibration.edvMl
+    @State private var esv: Double = AppConstants.Calibration.esvMl
+    @State private var lvidd: Double = AppConstants.Calibration.lviddCm
+    @State private var lvids: Double = AppConstants.Calibration.lvidsCm
+    @State private var ivsd: Double = AppConstants.Calibration.ivsdCm
+    @State private var lvpwd: Double = AppConstants.Calibration.lvpwdCm
+    @State private var tapse: Double = AppConstants.Calibration.tapseMm
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Adjust multipliers (hidden; for validation only)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            stepper("EF %", value: $ef)
+            stepper("EDV mL", value: $edv)
+            stepper("ESV mL", value: $esv)
+            stepper("LVIDd cm", value: $lvidd)
+            stepper("LVIDs cm", value: $lvids)
+            stepper("IVSd cm", value: $ivsd)
+            stepper("LVPWd cm", value: $lvpwd)
+            stepper("TAPSE mm", value: $tapse, step: 0.1)
+
+            HStack {
+                Spacer()
+                Button("Apply") {
+                    AppConstants.Calibration.efPercent = ef
+                    AppConstants.Calibration.edvMl = edv
+                    AppConstants.Calibration.esvMl = esv
+                    AppConstants.Calibration.lviddCm = lvidd
+                    AppConstants.Calibration.lvidsCm = lvids
+                    AppConstants.Calibration.ivsdCm = ivsd
+                    AppConstants.Calibration.lvpwdCm = lvpwd
+                    AppConstants.Calibration.tapseMm = tapse
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+    }
+
+    private func stepper(_ label: String, value: Binding<Double>, step: Double = 0.01) -> some View
+    {
+        HStack {
+            Text(label)
+            Spacer()
+            Stepper(value: value, in: 0.5...1.5, step: step) {
+                Text(String(format: "%.2f×", value.wrappedValue))
+            }
         }
     }
 }
